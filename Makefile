@@ -39,6 +39,16 @@ cc-proxy: $(SOURCES)
 	$(QUIET_GOBUILD)go build -i -ldflags "-X main.DefaultSocketPath=$(PROXY_SOCKET)" -o $@ .
 
 #
+# Tests
+#
+
+.PHONY: check check-go-static
+check: check-go-static
+
+check-go-static:
+	.ci/go-static-checks.sh $(GO_STATIC_CHECKS_ARGS)
+
+#
 # install
 #
 

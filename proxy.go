@@ -27,7 +27,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/01org/cc-oci-runtime/proxy/api"
+	"github.com/clearcontainers/proxy/api"
 
 	"github.com/golang/glog"
 )

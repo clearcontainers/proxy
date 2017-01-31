@@ -38,7 +38,7 @@ Check status on proxy-socket:
 ● cc-proxy.socket - Clear Containers Proxy Socket
    Loaded: loaded (/usr/lib/systemd/system/cc-proxy.socket; disabled; vendor preset: disabled)
       Active: active (listening) since Tue 2017-01-17 14:36:36 CST; 8min ago
-           Docs: https://github.com/01org/cc-oci-runtime/proxy
+           Docs: https://github.com/clearcontainers/proxy
               Listen: /var/run/cc-oci-runtime/proxy.sock (Stream)
 
               Jan 17 14:36:36 foo.bar systemd[1]: Listening on Clear Containers Proxy Socket.

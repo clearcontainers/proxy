@@ -86,7 +86,7 @@ As a concrete example, here is an exchange between a client and the proxy:
 ## Payloads
 
 Payloads are in their own package and [documented there](
-https://godoc.org/github.com/01org/cc-oci-runtime/proxy/api)
+https://godoc.org/github.com/clearcontainers/proxy/api)
 
 ## `systemd` integration
 

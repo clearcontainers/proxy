@@ -20,7 +20,7 @@ import (
 	"net"
 	"os"
 
-	"github.com/01org/cc-oci-runtime/proxy/api"
+	"github.com/clearcontainers/proxy/api"
 )
 
 // XXX: could do with its own package to remove that ugly namespacing

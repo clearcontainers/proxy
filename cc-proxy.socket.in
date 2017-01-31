@@ -1,6 +1,6 @@
 [Unit]
 Description=Clear Containers Proxy Socket
-Documentation=https://github.com/01org/cc-oci-runtime/proxy
+Documentation=https://github.com/clearcontainers/proxy
 PartOf=cc-proxy.service
 
 [Socket]

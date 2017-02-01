@@ -3,6 +3,22 @@
 	"ignore": "test",
 	"package": [
 		{
+			"checksumSHA1": "/VYs48A7CWQcgtqWouDTxwoTQ+U=",
+			"path": "github.com/containers/virtcontainers/hyperstart",
+			"revision": "2d9515d808230812473b0384ddf2610032540e38",
+			"revisionTime": "2016-12-20T19:34:36Z",
+			"version": "=v0.2.3",
+			"versionExact": "v0.2.3"
+		},
+		{
+			"checksumSHA1": "sMW9oTsnkvsI45hXsDnVo8vf2Hc=",
+			"path": "github.com/containers/virtcontainers/hyperstart/mock",
+			"revision": "2d9515d808230812473b0384ddf2610032540e38",
+			"revisionTime": "2016-12-20T19:34:36Z",
+			"version": "=v0.2.3",
+			"versionExact": "v0.2.3"
+		},
+		{
 			"checksumSHA1": "dvabztWVQX8f6oMLRyv4dLH+TGY=",
 			"path": "github.com/davecgh/go-spew/spew",
 			"revision": "346938d642f2ec3594ed81d874461961cd0faa76",

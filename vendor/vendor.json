@@ -33,6 +33,12 @@
 			"revisionTime": "2016-01-25T20:49:56Z"
 		},
 		{
+			"checksumSHA1": "3zOwnwQGp1xvw7I81KwiKd4e5p4=",
+			"path": "github.com/hyperhq/runv/hyperstart/api/json",
+			"revision": "ed95cfe252382c58b4884fc68161b9dc3b378d28",
+			"revisionTime": "2017-01-20T02:58:56Z"
+		},
+		{
 			"checksumSHA1": "LuFv4/jlrmFNnDb/5SCSEPAM9vU=",
 			"path": "github.com/pmezard/go-difflib/difflib",
 			"revision": "792786c7400a136282c1664665ae0a8db921c6c2",

@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.org/clearcontainers/proxy.svg?branch=master)](https://travis-ci.org/clearcontainers/proxy)
+
 # `cc-proxy`
 
 `cc-proxy` is a daemon offering access to the

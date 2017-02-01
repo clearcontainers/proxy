@@ -49,7 +49,7 @@ check-go-static:
 	.ci/go-static-checks.sh $(GO_STATIC_CHECKS_ARGS)
 
 check-go-test:
-	go test -v -race -timeout 2s . ./api
+	.ci/go-test.sh
 
 #
 # install

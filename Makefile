@@ -55,6 +55,13 @@ coverage:
 	.ci/go-test.sh html-coverage
 
 #
+# Documentation
+#
+
+doc:
+	$(Q).ci/go-doc.sh || true
+
+#
 # install
 #
 

@@ -8,7 +8,7 @@
 clients. Only a single instance of `cc-proxy` per host is necessary as it can be
 used for several different VMs.
 
-![High-level Architecture Diagram](../documentation/high-level-overview.png)
+![High-level Architecture Diagram](docs/high-level-overview.png)
 
 - The `hyperstart` interface consists of:
     - A control channel on which the [`hyperstart` API]

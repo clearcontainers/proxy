@@ -7,7 +7,15 @@ test_packages="."
 go_test_flags="-v -race -timeout 2s"
 
 echo Running go test on packages "'$test_packages'" with flags "'$go_test_flags'"
-function test_travis
+
+function test_html_coverage
+{
+	test_coverage
+	go tool cover -html=profile.cov
+	rm -f profile.cov
+}
+
+function test_coverage
 {
 	echo "mode: count" > profile.cov
 
@@ -23,8 +31,10 @@ function test_local
 	go test $go_test_flags $test_packages
 }
 
-if [ "$CI" = "true" ]; then
-	test_travis
+if [ "$1" = "html-coverage" ]; then
+	test_html_coverage
+elif [ "$CI" = "true" ]; then
+	test_coverage
 else
 	test_local
 fi

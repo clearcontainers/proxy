@@ -51,6 +51,9 @@ check-go-static:
 check-go-test:
 	.ci/go-test.sh
 
+coverage:
+	.ci/go-test.sh html-coverage
+
 #
 # install
 #

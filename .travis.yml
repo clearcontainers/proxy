@@ -12,4 +12,5 @@ script:
         - make check
 
 after_success:
+        - go get github.com/mattn/goveralls
         - $GOPATH/bin/goveralls -service=travis-ci -coverprofile=profile.cov

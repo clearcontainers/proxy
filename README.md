@@ -1,6 +1,8 @@
 [![Build Status](https://travis-ci.org/clearcontainers/proxy.svg?branch=master)](https://travis-ci.org/clearcontainers/proxy)
 [![Go Report Card](https://goreportcard.com/badge/github.com/clearcontainers/proxy)](https://goreportcard.com/report/github.com/clearcontainers/proxy)
 [![Coverage Status](https://coveralls.io/repos/github/clearcontainers/proxy/badge.svg?branch=master)](https://coveralls.io/github/clearcontainers/proxy?branch=master)
+[![GoDoc](https://godoc.org/github.com/clearcontainers/proxy?status.svg)](https://godoc.org/github.com/clearcontainers/proxy/api)
+
 
 # `cc-proxy`
 

@@ -23,7 +23,8 @@ import (
 // Version encodes the proxy protocol version.
 //
 // List of changes:
-// • version 1: initial version released with Clear Containers 2.1
+//
+//   • version 1: initial version released with Clear Containers 2.1
 const Version = 1
 
 // The Hello payload is issued first after connecting to the proxy socket.

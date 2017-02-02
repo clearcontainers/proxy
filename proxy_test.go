@@ -28,7 +28,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/01org/cc-oci-runtime/proxy/api"
+	"github.com/clearcontainers/proxy/api"
 	"github.com/containers/virtcontainers/hyperstart/mock"
 
 	hyper "github.com/hyperhq/runv/hyperstart/api/json"

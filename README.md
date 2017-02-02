@@ -1,3 +1,9 @@
+[![Build Status](https://travis-ci.org/clearcontainers/proxy.svg?branch=master)](https://travis-ci.org/clearcontainers/proxy)
+[![Go Report Card](https://goreportcard.com/badge/github.com/clearcontainers/proxy)](https://goreportcard.com/report/github.com/clearcontainers/proxy)
+[![Coverage Status](https://coveralls.io/repos/github/clearcontainers/proxy/badge.svg?branch=master)](https://coveralls.io/github/clearcontainers/proxy?branch=master)
+[![GoDoc](https://godoc.org/github.com/clearcontainers/proxy?status.svg)](https://godoc.org/github.com/clearcontainers/proxy/api)
+
+
 # `cc-proxy`
 
 `cc-proxy` is a daemon offering access to the
@@ -5,7 +11,7 @@
 clients. Only a single instance of `cc-proxy` per host is necessary as it can be
 used for several different VMs.
 
-![High-level Architecture Diagram](../documentation/high-level-overview.png)
+![High-level Architecture Diagram](docs/high-level-overview.png)
 
 - The `hyperstart` interface consists of:
     - A control channel on which the [`hyperstart` API]
@@ -86,7 +92,7 @@ As a concrete example, here is an exchange between a client and the proxy:
 ## Payloads
 
 Payloads are in their own package and [documented there](
-https://godoc.org/github.com/01org/cc-oci-runtime/proxy/api)
+https://godoc.org/github.com/clearcontainers/proxy/api)
 
 ## `systemd` integration
 

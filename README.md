@@ -6,10 +6,15 @@
 
 # `cc-proxy`
 
-`cc-proxy` is a daemon offering access to the
-[`hyperstart`](https://github.com/hyperhq/hyperstart) VM agent to multiple
-clients. Only a single instance of `cc-proxy` per host is necessary as it can be
-used for several different VMs.
+`cc-proxy` works alongside the [Clear Containers runtime](
+https://github.com/clearcontainers/runtime) and [shim](
+https://github.com/clearcontainers/shim) to provide a VM-based [OCI runtime](
+https://www.opencontainers.org/) solution.
+
+`cc-proxy` is a daemon offering access to the [`hyperstart`](
+https://github.com/hyperhq/hyperstart) VM agent to both the runtime and shim
+processes. Only a single instance of `cc-proxy` per host is necessary as it can
+be used for several different VMs.
 
 ![High-level Architecture Diagram](docs/high-level-overview.png)
 

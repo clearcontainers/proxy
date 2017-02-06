@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package api defines the API cc-proxy exposes to clients, processes
-// connecting to the proxy AF_UNIX socket.
 package api
 
 import (

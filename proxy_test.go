@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/clearcontainers/proxy/api"
+	goapi "github.com/clearcontainers/proxy/client"
 	"github.com/containers/virtcontainers/hyperstart/mock"
 
 	hyper "github.com/hyperhq/runv/hyperstart/api/json"
@@ -57,7 +58,7 @@ type testRig struct {
 	proxyCommand    *exec.Cmd
 
 	// client
-	Client *api.Client
+	Client *goapi.Client
 
 	// fd leak detection
 	detector          *FdLeakDetector
@@ -140,7 +141,7 @@ func (rig *testRig) Start() {
 	}
 
 	// Client object that can be used to issue proxy commands
-	rig.Client = api.NewClient(clientConn.(*net.UnixConn))
+	rig.Client = goapi.NewClient(clientConn.(*net.UnixConn))
 }
 
 // A fake test we use to lauch a full proxy process

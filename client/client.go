@@ -12,13 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package api
+package client
 
 import (
 	"encoding/json"
 	"errors"
 	"net"
 	"os"
+
+	"github.com/clearcontainers/proxy/api"
 )
 
 // The Client struct can be used to issue proxy API calls with a convenient
@@ -41,10 +43,10 @@ func (client *Client) Close() {
 	client.conn.Close()
 }
 
-func (client *Client) sendPayload(id string, payload interface{}) (*Response, error) {
+func (client *Client) sendPayload(id string, payload interface{}) (*api.Response, error) {
 	var err error
 
-	req := Request{}
+	req := api.Request{}
 	req.ID = id
 	if payload != nil {
 		if req.Data, err = json.Marshal(payload); err != nil {
@@ -52,19 +54,19 @@ func (client *Client) sendPayload(id string, payload interface{}) (*Response, er
 		}
 	}
 
-	if err := WriteMessage(client.conn, &req); err != nil {
+	if err := api.WriteMessage(client.conn, &req); err != nil {
 		return nil, err
 	}
 
-	resp := Response{}
-	if err := ReadMessage(client.conn, &resp); err != nil {
+	resp := api.Response{}
+	if err := api.ReadMessage(client.conn, &resp); err != nil {
 		return nil, err
 	}
 
 	return &resp, nil
 }
 
-func errorFromResponse(resp *Response) error {
+func errorFromResponse(resp *api.Response) error {
 	// We should always have an error with the response, but better safe
 	// than sorry.
 	if resp.Success == false {
@@ -93,7 +95,7 @@ type HelloReturn struct {
 // Hello wraps the Hello payload (see payload description for more details)
 func (client *Client) Hello(containerID, ctlSerial, ioSerial string,
 	options *HelloOptions) (*HelloReturn, error) {
-	hello := Hello{
+	hello := api.Hello{
 		ContainerID: containerID,
 		CtlSerial:   ctlSerial,
 		IoSerial:    ioSerial,
@@ -132,7 +134,7 @@ type AttachReturn struct {
 
 // Attach wraps the Attach payload (see payload description for more details)
 func (client *Client) Attach(containerID string, options *AttachOptions) (*AttachReturn, error) {
-	hello := Attach{
+	hello := api.Attach{
 		ContainerID: containerID,
 	}
 
@@ -154,7 +156,7 @@ func (client *Client) Attach(containerID string, options *AttachOptions) (*Attac
 
 // AllocateIo wraps the AllocateIo payload (see payload description for more details)
 func (client *Client) AllocateIo(nStreams int) (ioBase uint64, ioFile *os.File, err error) {
-	allocate := AllocateIo{
+	allocate := api.AllocateIo{
 		NStreams: nStreams,
 	}
 
@@ -176,7 +178,7 @@ func (client *Client) AllocateIo(nStreams int) (ioBase uint64, ioFile *os.File, 
 	ioBase = (uint64)(val.(float64))
 
 	// I/O fd
-	newFd, err := ReadFd(client.conn)
+	newFd, err := api.ReadFd(client.conn)
 	if err != nil {
 		return 0, nil, errors.New("allocateio: couldn't read fd")
 	}
@@ -199,7 +201,7 @@ func (client *Client) Hyper(hyperName string, hyperMessage interface{}) error {
 		}
 	}
 
-	hyper := Hyper{
+	hyper := api.Hyper{
 		HyperName: hyperName,
 		Data:      data,
 	}
@@ -214,7 +216,7 @@ func (client *Client) Hyper(hyperName string, hyperMessage interface{}) error {
 
 // Bye wraps the Bye payload (see payload description for more details)
 func (client *Client) Bye(containerID string) error {
-	bye := Bye{
+	bye := api.Bye{
 		ContainerID: containerID,
 	}
 

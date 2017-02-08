@@ -40,7 +40,7 @@ type RegisterVM struct {
 	Console     string `json:"console,omitempty"`
 }
 
-// RegisterVMResult is the result from a successful RegisterVM.
+// RegisterVMResponse is the result from a successful RegisterVM.
 //
 //  {
 //    "success": true,
@@ -48,7 +48,7 @@ type RegisterVM struct {
 //      "version": 1
 //    }
 //  }
-type RegisterVMResult struct {
+type RegisterVMResponse struct {
 	// The version of the proxy protocol
 	Version int `json:"version"`
 }
@@ -67,7 +67,7 @@ type AttachVM struct {
 	ContainerID string `json:"containerId"`
 }
 
-// AttachVMResult is the result from a successful AttachVM.
+// AttachVMResponse is the result from a successful AttachVM.
 //
 //  {
 //    "success": true,
@@ -75,7 +75,7 @@ type AttachVM struct {
 //      "version": 1
 //    }
 //  }
-type AttachVMResult struct {
+type AttachVMResponse struct {
 	// The version of the proxy protocol
 	Version int `json:"version"`
 }

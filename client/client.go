@@ -89,7 +89,7 @@ type RegisterVMOptions struct {
 
 // RegisterVMReturn contains the return values from RegisterVM.
 //
-// See the api.RegisterVM and api.RegisterVMResult payloads.
+// See the api.RegisterVM and api.RegisterVMResponse payloads.
 type RegisterVMReturn struct {
 	Version int
 }
@@ -133,7 +133,7 @@ type AttachVMOptions struct {
 
 // AttachVMReturn contains the return values from AttachVM.
 //
-// See the api.AttachVM and api.AttachVMResult payloads.
+// See the api.AttachVM and api.AttachVMResponse payloads.
 type AttachVMReturn struct {
 	Version int
 }

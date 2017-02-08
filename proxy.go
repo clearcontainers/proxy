@@ -197,54 +197,6 @@ func unregisterVMHandler(data []byte, userData interface{}, response *handlerRes
 	client.vm = nil
 }
 
-// "allocateIO"
-func allocateIoHandler(data []byte, userData interface{}, response *handlerResponse) {
-	client := userData.(*client)
-	vm := client.vm
-
-	allocateIo := api.AllocateIo{}
-	if err := json.Unmarshal(data, &allocateIo); err != nil {
-		response.SetError(err)
-		return
-	}
-
-	if allocateIo.NStreams < 1 || allocateIo.NStreams > 2 {
-		response.SetErrorf("asking for unexpected number of streams (%d)",
-			allocateIo.NStreams)
-	}
-
-	if vm == nil {
-		response.SetErrorMsg("client not attached to a vm")
-		return
-	}
-
-	client.infof(1, "allocateIo(nStreams=%d)", allocateIo.NStreams)
-
-	// We'll send c0 to the client, keep c1
-	c0, c1, err := Socketpair()
-	if err != nil {
-		response.SetError(err)
-		return
-	}
-
-	f0, err := c0.File()
-	if err != nil {
-		response.SetError(err)
-		return
-	}
-
-	ioBase := vm.AllocateIo(allocateIo.NStreams, client.id, c1)
-
-	client.infof(1, "-> %d streams allocated, ioBase=%d", allocateIo.NStreams, ioBase)
-
-	response.AddResult("ioBase", ioBase)
-	response.SetFile(f0)
-
-	// File() dups the underlying fd, so it's safe to close c0 here (will
-	// keep the c0 <-> c1 connection alive).
-	c0.Close()
-}
-
 // "hyper"
 func hyperHandler(data []byte, userData interface{}, response *handlerResponse) {
 	client := userData.(*client)
@@ -366,7 +318,6 @@ func (proxy *proxy) serve() {
 	proto.Handle("register", registerVMHandler)
 	proto.Handle("attach", attachVMHandler)
 	proto.Handle("unregister", unregisterVMHandler)
-	proto.Handle("allocateIO", allocateIoHandler)
 	proto.Handle("hyper", hyperHandler)
 
 	glog.V(1).Info("proxy started")

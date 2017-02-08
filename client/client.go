@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
-	"os"
 
 	"github.com/clearcontainers/proxy/api"
 )
@@ -161,40 +160,6 @@ func (client *Client) AttachVM(containerID string, options *AttachVMOptions) (*A
 	ret.Version = int(val.(float64))
 
 	return ret, errorFromResponse(resp)
-}
-
-// AllocateIo wraps the AllocateIo payload (see payload description for more details)
-func (client *Client) AllocateIo(nStreams int) (ioBase uint64, ioFile *os.File, err error) {
-	allocate := api.AllocateIo{
-		NStreams: nStreams,
-	}
-
-	resp, err := client.sendPayload("allocateIO", &allocate)
-	if err != nil {
-		return
-	}
-
-	err = errorFromResponse(resp)
-	if err != nil {
-		return
-	}
-
-	val, ok := resp.Data["ioBase"]
-	if !ok {
-		return 0, nil, errors.New("allocateio: no ioBase in response")
-	}
-
-	ioBase = (uint64)(val.(float64))
-
-	// I/O fd
-	newFd, err := api.ReadFd(client.conn)
-	if err != nil {
-		return 0, nil, errors.New("allocateio: couldn't read fd")
-	}
-
-	ioFile = os.NewFile(uintptr(newFd), "")
-
-	return
 }
 
 // Hyper wraps the Hyper payload (see payload description for more details)

@@ -162,10 +162,10 @@ func attachHandler(data []byte, userData interface{}, response *handlerResponse)
 	response.AddResult("version", api.Version)
 }
 
-// "bye"
-func byeHandler(data []byte, userData interface{}, response *handlerResponse) {
-	// Bye only affects the proxy.vms map and so removes the VM from the
-	// client visible API.
+// "UnregisterVM"
+func unregisterVMHandler(data []byte, userData interface{}, response *handlerResponse) {
+	// UnregisterVM only affects the proxy.vms map and so removes the VM
+	// from the client visible API.
 	// vm.Close(), which tears down the VM object, is done at the end of
 	// the VM life cycle, when  we detect the qemu process is effectively
 	// gone (see RegisterVMHandler)
@@ -173,22 +173,22 @@ func byeHandler(data []byte, userData interface{}, response *handlerResponse) {
 	client := userData.(*client)
 	proxy := client.proxy
 
-	bye := api.Bye{}
-	if err := json.Unmarshal(data, &bye); err != nil {
+	payload := api.UnregisterVM{}
+	if err := json.Unmarshal(data, &payload); err != nil {
 		response.SetError(err)
 		return
 	}
 
 	proxy.Lock()
-	vm := proxy.vms[bye.ContainerID]
+	vm := proxy.vms[payload.ContainerID]
 	proxy.Unlock()
 
 	if vm == nil {
-		response.SetErrorf("unknown containerID: %s", bye.ContainerID)
+		response.SetErrorf("unknown containerID: %s", payload.ContainerID)
 		return
 	}
 
-	client.info(1, "bye()")
+	client.info(1, "UnregisterVM()")
 
 	proxy.Lock()
 	delete(proxy.vms, vm.containerID)
@@ -365,7 +365,7 @@ func (proxy *proxy) serve() {
 	proto := newProtocol()
 	proto.Handle("register", registerVMHandler)
 	proto.Handle("attach", attachHandler)
-	proto.Handle("bye", byeHandler)
+	proto.Handle("unregister", unregisterVMHandler)
 	proto.Handle("allocateIO", allocateIoHandler)
 	proto.Handle("hyper", hyperHandler)
 

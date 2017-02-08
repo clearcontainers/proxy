@@ -80,17 +80,17 @@ type AttachResult struct {
 	Version int `json:"version"`
 }
 
-// The Bye payload does the opposite of what RegisterVM does, indicating to the
-// proxy it should release resources created by RegisterVM for the container
-// identified by containerId.
+// The UnregisterVM payload does the opposite of what RegisterVM does,
+// indicating to the proxy it should release resources created by RegisterVM
+// for the container identified by containerId.
 //
 //  {
-//    "id": "bye",
+//    "id": "unregister",
 //    "data": {
 //      "containerId": "756535dc6e9ab9b560f84c8..."
 //    }
 //  }
-type Bye struct {
+type UnregisterVM struct {
 	ContainerID string `json:"containerId"`
 }
 

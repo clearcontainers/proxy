@@ -240,10 +240,10 @@ func TestRegisterVM(t *testing.T) {
 	rig.Stop()
 }
 
-func TestBye(t *testing.T) {
+func TestUnregisterVM(t *testing.T) {
 	proto := newProtocol()
 	proto.Handle("register", registerVMHandler)
-	proto.Handle("bye", byeHandler)
+	proto.Handle("unregister", unregisterVMHandler)
 
 	rig := newTestRig(t, proto)
 	rig.Start()
@@ -253,19 +253,20 @@ func TestBye(t *testing.T) {
 	_, err := rig.Client.RegisterVM(testContainerID, ctlSocketPath, ioSocketPath, nil)
 	assert.Nil(t, err)
 
-	// Bye with a bad containerID
-	err = rig.Client.Bye("foo")
+	// UnregisterVM with a bad containerID.
+	err = rig.Client.UnregisterVM("foo")
 	assert.NotNil(t, err)
 
 	// Bye!
-	err = rig.Client.Bye(testContainerID)
+	err = rig.Client.UnregisterVM(testContainerID)
 	assert.Nil(t, err)
 
-	// A second Bye (client not attached anymore) should return an error
-	err = rig.Client.Bye(testContainerID)
+	// A second UnregisterVM (client not attached anymore) should return an
+	// error.
+	err = rig.Client.UnregisterVM(testContainerID)
 	assert.NotNil(t, err)
 
-	// Bye should unregister the vm object
+	// UnregisterVM should unregister the vm object
 	proxy := rig.proxy
 	proxy.Lock()
 	vm := proxy.vms[testContainerID]
@@ -283,7 +284,7 @@ func TestAttach(t *testing.T) {
 	proto := newProtocol()
 	proto.Handle("register", registerVMHandler)
 	proto.Handle("attach", attachHandler)
-	proto.Handle("bye", byeHandler)
+	proto.Handle("unregister", unregisterVMHandler)
 
 	rig := newTestRig(t, proto)
 	rig.Start()
@@ -298,14 +299,15 @@ func TestAttach(t *testing.T) {
 	assert.NotNil(t, err)
 
 	// Attaching to an existing VM should work. To test we are effectively
-	// attached, we issue a bye that would error out if not attached.
+	// attached, we issue an UnregisterVM that would error out if not
+	// attached.
 	ret, err := rig.Client.Attach(testContainerID, nil)
 	assert.Nil(t, err)
 
 	// Check that Attach returns the protocol version
 	assert.Equal(t, api.Version, ret.Version)
 
-	err = rig.Client.Bye(testContainerID)
+	err = rig.Client.UnregisterVM(testContainerID)
 	assert.Nil(t, err)
 
 	// This test shouldn't send anything with hyperstart

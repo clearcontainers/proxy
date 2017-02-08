@@ -219,13 +219,15 @@ func (client *Client) Hyper(hyperName string, hyperMessage interface{}) error {
 	return errorFromResponse(resp)
 }
 
-// Bye wraps the Bye payload (see payload description for more details)
-func (client *Client) Bye(containerID string) error {
-	bye := api.Bye{
+// UnregisterVM wraps the api.UnregisterVM payload.
+//
+// See the api.UnregisterVM payload description for more details.
+func (client *Client) UnregisterVM(containerID string) error {
+	payload := api.UnregisterVM{
 		ContainerID: containerID,
 	}
 
-	resp, err := client.sendPayload("bye", &bye)
+	resp, err := client.sendPayload("unregister", &payload)
 	if err != nil {
 		return err
 	}

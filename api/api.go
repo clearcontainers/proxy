@@ -18,7 +18,7 @@ import (
 	"encoding/json"
 )
 
-// The Hello payload is issued first after connecting to the proxy socket.
+// The RegisterVM payload is issued first after connecting to the proxy socket.
 // It is used to let the proxy know about a new container on the system along
 // with the paths go hyperstart's command and I/O channels (AF_UNIX sockets).
 //
@@ -26,21 +26,21 @@ import (
 // console. The proxy can output this data when asked for verbose output.
 //
 //  {
-//    "id": "hello",
+//    "id": "registerVM",
 //    "data": {
 //      "containerId": "756535dc6e9ab9b560f84c8...",
 //      "ctlSerial": "/tmp/sh.hyper.channel.0.sock",
 //      "ioSerial": "/tmp/sh.hyper.channel.1.sock"
 //    }
 //  }
-type Hello struct {
+type RegisterVM struct {
 	ContainerID string `json:"containerId"`
 	CtlSerial   string `json:"ctlSerial"`
 	IoSerial    string `json:"ioSerial"`
 	Console     string `json:"console,omitempty"`
 }
 
-// HelloResult is the result from a successful Hello.
+// RegisterVMResult is the result from a successful RegisterVM.
 //
 //  {
 //    "success": true,
@@ -48,14 +48,14 @@ type Hello struct {
 //      "version": 1
 //    }
 //  }
-type HelloResult struct {
+type RegisterVMResult struct {
 	// The version of the proxy protocol
 	Version int `json:"version"`
 }
 
 // The Attach payload can be used to associate clients to an already known VM.
-// attach cannot be issued if a hello for this container hasn't been issued
-// beforehand.
+// attach cannot be issued if a RegisterVM for this container hasn't been
+// issued beforehand.
 //
 //  {
 //    "id": "attach",
@@ -80,8 +80,8 @@ type AttachResult struct {
 	Version int `json:"version"`
 }
 
-// The Bye payload does the opposite of what hello does, indicating to the
-// proxy it should release resources created by hello for the container
+// The Bye payload does the opposite of what RegisterVM does, indicating to the
+// proxy it should release resources created by RegisterVM for the container
 // identified by containerId.
 //
 //  {

@@ -80,41 +80,46 @@ func errorFromResponse(resp *api.Response) error {
 	return nil
 }
 
-// HelloOptions holds extra arguments one can pass to the Hello function. See
-// the Hello payload for more details.
-type HelloOptions struct {
+// RegisterVMOptions holds extra arguments one can pass to the RegisterVM
+// function.
+//
+// See the api.RegisterVM payload for more details.
+type RegisterVMOptions struct {
 	Console string
 }
 
-// HelloReturn contains the return values from Hello. See the Hello and
-// HelloResult payloads.
-type HelloReturn struct {
+// RegisterVMReturn contains the return values from RegisterVM.
+//
+// See the api.RegisterVM and api.RegisterVMResult payloads.
+type RegisterVMReturn struct {
 	Version int
 }
 
-// Hello wraps the Hello payload (see payload description for more details)
-func (client *Client) Hello(containerID, ctlSerial, ioSerial string,
-	options *HelloOptions) (*HelloReturn, error) {
-	hello := api.Hello{
+// RegisterVM wraps the api.RegisterVM payload.
+//
+// See payload description for more details.
+func (client *Client) RegisterVM(containerID, ctlSerial, ioSerial string,
+	options *RegisterVMOptions) (*RegisterVMReturn, error) {
+	payload := api.RegisterVM{
 		ContainerID: containerID,
 		CtlSerial:   ctlSerial,
 		IoSerial:    ioSerial,
 	}
 
 	if options != nil {
-		hello.Console = options.Console
+		payload.Console = options.Console
 	}
 
-	resp, err := client.sendPayload("hello", &hello)
+	resp, err := client.sendPayload("register", &payload)
 	if err != nil {
 		return nil, err
 	}
 
-	ret := &HelloReturn{}
+	ret := &RegisterVMReturn{}
 
 	val, ok := resp.Data["version"]
 	if !ok {
-		return nil, errors.New("hello: no version in response")
+		return nil, errors.New("RegisterVM: no version in response")
 	}
 	ret.Version = int(val.(float64))
 

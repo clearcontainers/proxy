@@ -77,44 +77,46 @@ func (c *client) infof(lvl glog.Level, fmt string, a ...interface{}) {
 	glog.Infof("[client #%d] "+fmt, a...)
 }
 
-// "hello"
-func helloHandler(data []byte, userData interface{}, response *handlerResponse) {
+// "RegisterVM"
+func registerVMHandler(data []byte, userData interface{}, response *handlerResponse) {
 	client := userData.(*client)
-	hello := api.Hello{}
+	payload := api.RegisterVM{}
 
-	if err := json.Unmarshal(data, &hello); err != nil {
+	if err := json.Unmarshal(data, &payload); err != nil {
 		response.SetError(err)
 		return
 	}
 
-	if hello.ContainerID == "" || hello.CtlSerial == "" || hello.IoSerial == "" {
-		response.SetErrorMsg("malformed hello command")
+	if payload.ContainerID == "" || payload.CtlSerial == "" || payload.IoSerial == "" {
+		response.SetErrorMsg("malformed RegisterVM command")
 	}
 
 	proxy := client.proxy
 	proxy.Lock()
-	if _, ok := proxy.vms[hello.ContainerID]; ok {
+	if _, ok := proxy.vms[payload.ContainerID]; ok {
 
 		proxy.Unlock()
 		response.SetErrorf("%s: container already registered",
-			hello.ContainerID)
+			payload.ContainerID)
 		return
 	}
 
-	client.infof(1, "hello(containerId=%s,ctlSerial=%s,ioSerial=%s,console=%s)", hello.ContainerID,
-		hello.CtlSerial, hello.IoSerial, hello.Console)
+	client.infof(1,
+		"RegisterVM(containerId=%s,ctlSerial=%s,ioSerial=%s,console=%s)",
+		payload.ContainerID, payload.CtlSerial, payload.IoSerial,
+		payload.Console)
 
-	vm := newVM(hello.ContainerID, hello.CtlSerial, hello.IoSerial)
-	proxy.vms[hello.ContainerID] = vm
+	vm := newVM(payload.ContainerID, payload.CtlSerial, payload.IoSerial)
+	proxy.vms[payload.ContainerID] = vm
 	proxy.Unlock()
 
-	if hello.Console != "" && proxy.enableVMConsole {
-		vm.setConsole(hello.Console)
+	if payload.Console != "" && proxy.enableVMConsole {
+		vm.setConsole(payload.Console)
 	}
 
 	if err := vm.Connect(); err != nil {
 		proxy.Lock()
-		delete(proxy.vms, hello.ContainerID)
+		delete(proxy.vms, payload.ContainerID)
 		proxy.Unlock()
 		response.SetError(err)
 		return
@@ -166,7 +168,7 @@ func byeHandler(data []byte, userData interface{}, response *handlerResponse) {
 	// client visible API.
 	// vm.Close(), which tears down the VM object, is done at the end of
 	// the VM life cycle, when  we detect the qemu process is effectively
-	// gone (see helloHandler)
+	// gone (see RegisterVMHandler)
 
 	client := userData.(*client)
 	proxy := client.proxy
@@ -361,7 +363,7 @@ func (proxy *proxy) serve() {
 
 	// Define the client (runtime/shim) <-> proxy protocol
 	proto := newProtocol()
-	proto.Handle("hello", helloHandler)
+	proto.Handle("register", registerVMHandler)
 	proto.Handle("attach", attachHandler)
 	proto.Handle("bye", byeHandler)
 	proto.Handle("allocateIO", allocateIoHandler)
@@ -388,7 +390,7 @@ func proxyMain() {
 	}
 	proxy.serve()
 
-	// Wait for all the goroutines started by helloHandler to finish.
+	// Wait for all the goroutines started by registerVMHandler to finish.
 	//
 	// Not stricly necessary as:
 	//   • currently proxy.serve() cannot return,

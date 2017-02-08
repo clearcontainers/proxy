@@ -126,29 +126,33 @@ func (client *Client) RegisterVM(containerID, ctlSerial, ioSerial string,
 	return ret, errorFromResponse(resp)
 }
 
-// AttachOptions holds extra arguments one can pass to the Attach function. See
-// the Attach payload for more details.
-type AttachOptions struct {
+// AttachVMOptions holds extra arguments one can pass to the AttachVM function.
+//
+// See the api.AttachVM payload for more details.
+type AttachVMOptions struct {
 }
 
-// AttachReturn contains the return values from Hello. See the Hello and
-// AttachResult payloads.
-type AttachReturn struct {
+// AttachVMReturn contains the return values from AttachVM.
+//
+// See the api.AttachVM and api.AttachVMResult payloads.
+type AttachVMReturn struct {
 	Version int
 }
 
-// Attach wraps the Attach payload (see payload description for more details)
-func (client *Client) Attach(containerID string, options *AttachOptions) (*AttachReturn, error) {
-	hello := api.Attach{
+// AttachVM wraps the api.AttachVM payload.
+//
+// See the api.AttachVM payload description for more details.
+func (client *Client) AttachVM(containerID string, options *AttachVMOptions) (*AttachVMReturn, error) {
+	payload := api.AttachVM{
 		ContainerID: containerID,
 	}
 
-	resp, err := client.sendPayload("attach", &hello)
+	resp, err := client.sendPayload("attach", &payload)
 	if err != nil {
 		return nil, err
 	}
 
-	ret := &AttachReturn{}
+	ret := &AttachVMReturn{}
 
 	val, ok := resp.Data["version"]
 	if !ok {

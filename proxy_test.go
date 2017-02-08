@@ -280,10 +280,10 @@ func TestUnregisterVM(t *testing.T) {
 	rig.Stop()
 }
 
-func TestAttach(t *testing.T) {
+func TestAttachVM(t *testing.T) {
 	proto := newProtocol()
 	proto.Handle("register", registerVMHandler)
-	proto.Handle("attach", attachHandler)
+	proto.Handle("attach", attachVMHandler)
 	proto.Handle("unregister", unregisterVMHandler)
 
 	rig := newTestRig(t, proto)
@@ -295,16 +295,16 @@ func TestAttach(t *testing.T) {
 	assert.Nil(t, err)
 
 	// Attaching to an unknown VM should return an error
-	_, err = rig.Client.Attach("foo", nil)
+	_, err = rig.Client.AttachVM("foo", nil)
 	assert.NotNil(t, err)
 
 	// Attaching to an existing VM should work. To test we are effectively
 	// attached, we issue an UnregisterVM that would error out if not
 	// attached.
-	ret, err := rig.Client.Attach(testContainerID, nil)
+	ret, err := rig.Client.AttachVM(testContainerID, nil)
 	assert.Nil(t, err)
 
-	// Check that Attach returns the protocol version
+	// Check that AttachVM returns the protocol version
 	assert.Equal(t, api.Version, ret.Version)
 
 	err = rig.Client.UnregisterVM(testContainerID)

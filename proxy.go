@@ -136,26 +136,26 @@ func registerVMHandler(data []byte, userData interface{}, response *handlerRespo
 }
 
 // "attach"
-func attachHandler(data []byte, userData interface{}, response *handlerResponse) {
+func attachVMHandler(data []byte, userData interface{}, response *handlerResponse) {
 	client := userData.(*client)
 	proxy := client.proxy
 
-	attach := api.Attach{}
-	if err := json.Unmarshal(data, &attach); err != nil {
+	payload := api.AttachVM{}
+	if err := json.Unmarshal(data, &payload); err != nil {
 		response.SetError(err)
 		return
 	}
 
 	proxy.Lock()
-	vm := proxy.vms[attach.ContainerID]
+	vm := proxy.vms[payload.ContainerID]
 	proxy.Unlock()
 
 	if vm == nil {
-		response.SetErrorf("unknown containerID: %s", attach.ContainerID)
+		response.SetErrorf("unknown containerID: %s", payload.ContainerID)
 		return
 	}
 
-	client.infof(1, "attach(containerId=%s)", attach.ContainerID)
+	client.infof(1, "AttachVM(containerId=%s)", payload.ContainerID)
 
 	client.vm = vm
 
@@ -364,7 +364,7 @@ func (proxy *proxy) serve() {
 	// Define the client (runtime/shim) <-> proxy protocol
 	proto := newProtocol()
 	proto.Handle("register", registerVMHandler)
-	proto.Handle("attach", attachHandler)
+	proto.Handle("attach", attachVMHandler)
 	proto.Handle("unregister", unregisterVMHandler)
 	proto.Handle("allocateIO", allocateIoHandler)
 	proto.Handle("hyper", hyperHandler)

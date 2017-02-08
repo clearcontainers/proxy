@@ -53,8 +53,8 @@ type RegisterVMResult struct {
 	Version int `json:"version"`
 }
 
-// The Attach payload can be used to associate clients to an already known VM.
-// attach cannot be issued if a RegisterVM for this container hasn't been
+// The AttachVM payload can be used to associate clients to an already known
+// VM. AttachVM cannot be issued if a RegisterVM for this container hasn't been
 // issued beforehand.
 //
 //  {
@@ -63,11 +63,11 @@ type RegisterVMResult struct {
 //      "containerId": "756535dc6e9ab9b560f84c8..."
 //    }
 //  }
-type Attach struct {
+type AttachVM struct {
 	ContainerID string `json:"containerId"`
 }
 
-// AttachResult is the result from a successful Attach.
+// AttachVMResult is the result from a successful AttachVM.
 //
 //  {
 //    "success": true,
@@ -75,7 +75,7 @@ type Attach struct {
 //      "version": 1
 //    }
 //  }
-type AttachResult struct {
+type AttachVMResult struct {
 	// The version of the proxy protocol
 	Version int `json:"version"`
 }

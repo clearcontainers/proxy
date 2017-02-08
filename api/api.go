@@ -18,13 +18,6 @@ import (
 	"encoding/json"
 )
 
-// Version encodes the proxy protocol version.
-//
-// List of changes:
-//
-//   • version 1: initial version released with Clear Containers 2.1
-const Version = 1
-
 // The Hello payload is issued first after connecting to the proxy socket.
 // It is used to let the proxy know about a new container on the system along
 // with the paths go hyperstart's command and I/O channels (AF_UNIX sockets).

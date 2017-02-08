@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os"
 
 	"github.com/clearcontainers/proxy/api"
 )
@@ -30,7 +29,6 @@ type protocolHandler func([]byte, interface{}, *handlerResponse)
 type handlerResponse struct {
 	err     error
 	results map[string]interface{}
-	file    *os.File
 }
 
 func (r *handlerResponse) SetError(err error) {
@@ -50,10 +48,6 @@ func (r *handlerResponse) AddResult(key string, value interface{}) {
 		r.results = make(map[string]interface{})
 	}
 	r.results[key] = value
-}
-
-func (r *handlerResponse) SetFile(f *os.File) {
-	r.file = f
 }
 
 type protocol struct {
@@ -134,15 +128,5 @@ func (proto *protocol) Serve(conn net.Conn, userData interface{}) error {
 			// to the client (could be a disconnection, ...).
 			return err
 		}
-
-		// And send a fd if the handler associated a file with the response
-		if hr.file != nil {
-			if err = api.WriteFd(conn.(*net.UnixConn), int(hr.file.Fd())); err != nil {
-				hr.file.Close()
-				return err
-			}
-			hr.file.Close()
-		}
-
 	}
 }

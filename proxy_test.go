@@ -1,4 +1,4 @@
-// Copyright (c) 2016 Intel Corporation
+// Copyright (c) 2016,2017 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -206,7 +206,7 @@ const testContainerID = "0987654321"
 
 func TestRegisterVM(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle("register", registerVMHandler)
+	proto.Handle(api.CmdRegisterVM, registerVMHandler)
 
 	rig := newTestRig(t, proto)
 	rig.Start()
@@ -242,8 +242,8 @@ func TestRegisterVM(t *testing.T) {
 
 func TestUnregisterVM(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle("register", registerVMHandler)
-	proto.Handle("unregister", unregisterVMHandler)
+	proto.Handle(api.CmdRegisterVM, registerVMHandler)
+	proto.Handle(api.CmdUnregisterVM, unregisterVMHandler)
 
 	rig := newTestRig(t, proto)
 	rig.Start()
@@ -282,9 +282,9 @@ func TestUnregisterVM(t *testing.T) {
 
 func TestAttachVM(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle("register", registerVMHandler)
-	proto.Handle("attach", attachVMHandler)
-	proto.Handle("unregister", unregisterVMHandler)
+	proto.Handle(api.CmdRegisterVM, registerVMHandler)
+	proto.Handle(api.CmdAttachVM, attachVMHandler)
+	proto.Handle(api.CmdUnregisterVM, unregisterVMHandler)
 
 	rig := newTestRig(t, proto)
 	rig.Start()
@@ -319,8 +319,8 @@ func TestAttachVM(t *testing.T) {
 
 func TestHyperPing(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle("register", registerVMHandler)
-	proto.Handle("hyper", hyperHandler)
+	proto.Handle(api.CmdRegisterVM, registerVMHandler)
+	proto.Handle(api.CmdHyper, hyperHandler)
 
 	rig := newTestRig(t, proto)
 	rig.Start()
@@ -347,8 +347,8 @@ func TestHyperPing(t *testing.T) {
 
 func TestHyperStartpod(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle("register", registerVMHandler)
-	proto.Handle("hyper", hyperHandler)
+	proto.Handle(api.CmdRegisterVM, registerVMHandler)
+	proto.Handle(api.CmdHyper, hyperHandler)
 
 	rig := newTestRig(t, proto)
 	rig.Start()

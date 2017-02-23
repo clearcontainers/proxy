@@ -315,10 +315,10 @@ func (proxy *proxy) serve() {
 
 	// Define the client (runtime/shim) <-> proxy protocol
 	proto := newProtocol()
-	proto.Handle("register", registerVMHandler)
-	proto.Handle("attach", attachVMHandler)
-	proto.Handle("unregister", unregisterVMHandler)
-	proto.Handle("hyper", hyperHandler)
+	proto.Handle(api.CmdRegisterVM, registerVMHandler)
+	proto.Handle(api.CmdAttachVM, attachVMHandler)
+	proto.Handle(api.CmdUnregisterVM, unregisterVMHandler)
+	proto.Handle(api.CmdHyper, hyperHandler)
 
 	glog.V(1).Info("proxy started")
 

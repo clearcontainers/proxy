@@ -17,6 +17,7 @@ package client
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 
 	"github.com/clearcontainers/proxy/api"
@@ -42,41 +43,53 @@ func (client *Client) Close() {
 	client.conn.Close()
 }
 
-func (client *Client) sendPayload(id string, payload interface{}) (*api.Response, error) {
+func (client *Client) sendCommand(cmd api.Command, payload interface{}) (*api.Frame, error) {
+	var data []byte
+	var frame *api.Frame
 	var err error
 
-	req := api.Request{}
-	req.ID = id
 	if payload != nil {
-		if req.Data, err = json.Marshal(payload); err != nil {
+		if data, err = json.Marshal(payload); err != nil {
 			return nil, err
 		}
 	}
 
-	if err := api.WriteMessage(client.conn, &req); err != nil {
+	if err := api.WriteCommand(client.conn, cmd, data); err != nil {
 		return nil, err
 	}
 
-	resp := api.Response{}
-	if err := api.ReadMessage(client.conn, &resp); err != nil {
+	if frame, err = api.ReadFrame(client.conn); err != nil {
 		return nil, err
 	}
 
-	return &resp, nil
+	if frame.Header.Type != api.TypeResponse {
+		return nil, fmt.Errorf("unexepected frame type %v", frame.Header.Type)
+	}
+
+	if frame.Header.Opcode != int(cmd) {
+		return nil, fmt.Errorf("unexepected opcode %v", frame.Header.Opcode)
+	}
+
+	return frame, nil
 }
 
-func errorFromResponse(resp *api.Response) error {
+func errorFromResponse(resp *api.Frame) error {
 	// We should always have an error with the response, but better safe
 	// than sorry.
-	if resp.Success == false {
-		if resp.Error != "" {
-			return errors.New(resp.Error)
-		}
+	if !resp.Header.InError {
+		return nil
+	}
 
+	decoded := api.ErrorResponse{}
+	if err := json.Unmarshal(resp.Payload, &decoded); err != nil {
+		return err
+	}
+
+	if decoded.Message == "" {
 		return errors.New("unknown error")
 	}
 
-	return nil
+	return errors.New(decoded.Message)
 }
 
 // RegisterVMOptions holds extra arguments one can pass to the RegisterVM
@@ -109,20 +122,21 @@ func (client *Client) RegisterVM(containerID, ctlSerial, ioSerial string,
 		payload.Console = options.Console
 	}
 
-	resp, err := client.sendPayload("register", &payload)
+	resp, err := client.sendCommand(api.CmdRegisterVM, &payload)
 	if err != nil {
 		return nil, err
 	}
 
-	ret := &RegisterVMReturn{}
-
-	val, ok := resp.Data["version"]
-	if !ok {
-		return nil, errors.New("RegisterVM: no version in response")
+	if err := errorFromResponse(resp); err != nil {
+		return nil, err
 	}
-	ret.Version = int(val.(float64))
 
-	return ret, errorFromResponse(resp)
+	ret := RegisterVMReturn{}
+	if err := json.Unmarshal(resp.Payload, &ret); err != nil {
+		return nil, err
+	}
+
+	return &ret, nil
 }
 
 // AttachVMOptions holds extra arguments one can pass to the AttachVM function.
@@ -146,20 +160,21 @@ func (client *Client) AttachVM(containerID string, options *AttachVMOptions) (*A
 		ContainerID: containerID,
 	}
 
-	resp, err := client.sendPayload("attach", &payload)
+	resp, err := client.sendCommand(api.CmdAttachVM, &payload)
 	if err != nil {
 		return nil, err
 	}
 
-	ret := &AttachVMReturn{}
-
-	val, ok := resp.Data["version"]
-	if !ok {
-		return nil, errors.New("attach: no version in response")
+	if err := errorFromResponse(resp); err != nil {
+		return nil, err
 	}
-	ret.Version = int(val.(float64))
 
-	return ret, errorFromResponse(resp)
+	ret := AttachVMReturn{}
+	if err := json.Unmarshal(resp.Payload, &ret); err != nil {
+		return nil, err
+	}
+
+	return &ret, nil
 }
 
 // Hyper wraps the Hyper payload (see payload description for more details)
@@ -180,7 +195,7 @@ func (client *Client) Hyper(hyperName string, hyperMessage interface{}) error {
 		Data:      data,
 	}
 
-	resp, err := client.sendPayload("hyper", &hyper)
+	resp, err := client.sendCommand(api.CmdHyper, &hyper)
 	if err != nil {
 		return err
 	}
@@ -196,7 +211,7 @@ func (client *Client) UnregisterVM(containerID string) error {
 		ContainerID: containerID,
 	}
 
-	resp, err := client.sendPayload("unregister", &payload)
+	resp, err := client.sendCommand(api.CmdUnregisterVM, &payload)
 	if err != nil {
 		return err
 	}

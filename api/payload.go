@@ -1,4 +1,4 @@
-// Copyright (c) 2016 Intel Corporation
+// Copyright (c) 2016,2017 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,12 +26,9 @@ import (
 // console. The proxy can output this data when asked for verbose output.
 //
 //  {
-//    "id": "registerVM",
-//    "data": {
-//      "containerId": "756535dc6e9ab9b560f84c8...",
-//      "ctlSerial": "/tmp/sh.hyper.channel.0.sock",
-//      "ioSerial": "/tmp/sh.hyper.channel.1.sock"
-//    }
+//   "containerId": "756535dc6e9ab9b560f84c8...",
+//   "ctlSerial": "/tmp/sh.hyper.channel.0.sock",
+//   "ioSerial": "/tmp/sh.hyper.channel.1.sock"
 //  }
 type RegisterVM struct {
 	ContainerID string `json:"containerId"`
@@ -43,10 +40,7 @@ type RegisterVM struct {
 // RegisterVMResponse is the result from a successful RegisterVM.
 //
 //  {
-//    "success": true,
-//    "data": {
-//      "version": 1
-//    }
+//    "version": 1
 //  }
 type RegisterVMResponse struct {
 	// The version of the proxy protocol
@@ -58,10 +52,7 @@ type RegisterVMResponse struct {
 // issued beforehand.
 //
 //  {
-//    "id": "attach",
-//    "data": {
-//      "containerId": "756535dc6e9ab9b560f84c8..."
-//    }
+//    "containerId": "756535dc6e9ab9b560f84c8..."
 //  }
 type AttachVM struct {
 	ContainerID string `json:"containerId"`
@@ -70,13 +61,10 @@ type AttachVM struct {
 // AttachVMResponse is the result from a successful AttachVM.
 //
 //  {
-//    "success": true,
-//    "data": {
-//      "version": 1
-//    }
+//    "version": 1
 //  }
 type AttachVMResponse struct {
-	// The version of the proxy protocol
+	// Version is the version of the proxy protocol.
 	Version int `json:"version"`
 }
 
@@ -85,10 +73,7 @@ type AttachVMResponse struct {
 // for the container identified by containerId.
 //
 //  {
-//    "id": "unregister",
-//    "data": {
-//      "containerId": "756535dc6e9ab9b560f84c8..."
-//    }
+//    "containerId": "756535dc6e9ab9b560f84c8..."
 //  }
 type UnregisterVM struct {
 	ContainerID string `json:"containerId"`
@@ -110,4 +95,9 @@ type UnregisterVM struct {
 type Hyper struct {
 	HyperName string          `json:"hyperName"`
 	Data      json.RawMessage `json:"data,omitempty"`
+}
+
+// ErrorResponse is the payload send in Responses where the Error flag is set.
+type ErrorResponse struct {
+	Message string `json:"msg"`
 }

@@ -18,15 +18,13 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 )
 
-const headerLength = 8 // in bytes
-
-type header struct {
-	length uint32
-	flags  uint32
-}
+// minHeaderLength is the length of the header in the version 2 of protocol.
+// It is guaranteed later versions will have a header at least that big.
+const minHeaderLength = 12 // in bytes
 
 // A Request is a JSON message sent from a client to the proxy. This message
 // embed a payload identified by "id". A payload can have data associated with
@@ -52,68 +50,148 @@ type Response struct {
 	Data    map[string]interface{} `json:"data,omitempty"`
 }
 
-// ReadMessage reads a message from reader. A message is either a Request or a
-// Response
-func ReadMessage(reader io.Reader, msg interface{}) error {
-	buf := make([]byte, headerLength)
-	n, err := reader.Read(buf)
+func maxOpcodeForFrameType(t FrameType) int {
+	switch t {
+	default:
+		fallthrough
+	case TypeCommand:
+		return int(CmdMax)
+	case TypeResponse:
+		return int(CmdMax)
+	case TypeStream:
+		return int(StreamMax)
+	case TypeNotification:
+		return int(NotificationMax)
+	}
+}
+
+// ReadFrame reads a full frame (header and payload) from r.
+func ReadFrame(r io.Reader) (*Frame, error) {
+	// Read the header.
+	buf := make([]byte, minHeaderLength)
+	n, err := r.Read(buf)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if n != headerLength {
-		return errors.New("couldn't read the full header")
-	}
-
-	header := header{
-		length: binary.BigEndian.Uint32(buf[0:4]),
-		flags:  binary.BigEndian.Uint32(buf[4:8]),
+	if n != minHeaderLength {
+		return nil, errors.New("frame: couldn't read the full header")
 	}
 
+	// Decode it.
+	frame := &Frame{}
+	header := &frame.Header
+	header.Version = int(binary.BigEndian.Uint16(buf[0:2]))
+	if header.Version < 2 || header.Version > Version {
+		return nil, fmt.Errorf("frame: bad version %d", header.Version)
+	}
+	header.HeaderLength = int(buf[2]) * 4
+	header.Type = FrameType(buf[6] & 0xf)
+	flags := buf[6] & 0xf0
+	if flags&flagInError != 0 {
+		header.InError = true
+	}
+	if header.Type >= TypeMax {
+		return nil, fmt.Errorf("frame: bad type %s", header.Type)
+	}
+	header.Opcode = int(buf[7])
+	if header.Opcode >= maxOpcodeForFrameType(header.Type) {
+		return nil, fmt.Errorf("frame: bad opcode (%d) for type %s", header.Opcode,
+			header.Type)
+	}
+	header.PayloadLength = int(binary.BigEndian.Uint32(buf[8:12]))
+
+	// Read the payload.
 	received := 0
-	need := int(header.length)
-	data := make([]byte, need)
+	need := header.HeaderLength - minHeaderLength + header.PayloadLength
+	payload := make([]byte, need)
 	for received < need {
-		n, err := reader.Read(data[received:need])
+		n, err := r.Read(payload[received:need])
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		received += n
 	}
 
-	err = json.Unmarshal(data, msg)
+	// Skip the bytes part of a bigger header than expected to just keep
+	// the payload.
+	frame.Payload = payload[header.HeaderLength-minHeaderLength : need]
+
+	return frame, nil
+}
+
+const (
+	flagInError = 1 << (4 + iota)
+)
+
+// WriteFrame writes a frame into w.
+//
+// Note that frame.Header.PayloadLength dictates the amount of data of
+// frame.Payload to write, so frame.Header.Payload must be less or equal to
+// len(frame.Payload).
+func WriteFrame(w io.Writer, frame *Frame) error {
+	header := &frame.Header
+
+	if len(frame.Payload) < header.PayloadLength {
+		return fmt.Errorf("frame: bad payload length %d",
+			header.PayloadLength)
+	}
+
+	// Prepare the header.
+	buf := make([]byte, minHeaderLength)
+	binary.BigEndian.PutUint16(buf[0:2], uint16(header.Version))
+	buf[2] = byte(header.HeaderLength / 4)
+	flags := byte(0)
+	if frame.Header.InError {
+		flags |= flagInError
+	}
+	buf[6] = flags | byte(header.Type)&0xf
+	buf[7] = byte(header.Opcode)
+	binary.BigEndian.PutUint32(buf[8:8+4], uint32(header.PayloadLength))
+
+	// Write it.
+	n, err := w.Write(buf)
 	if err != nil {
 		return err
+	}
+	if n != minHeaderLength {
+		return errors.New("frame: couldn't write header")
+	}
+
+	// Write payload if needed
+	if header.PayloadLength == 0 {
+		return nil
+	}
+
+	n, err = w.Write(frame.Payload[0:header.PayloadLength])
+	if err != nil {
+		return err
+	}
+	if n != header.PayloadLength {
+		return errors.New("frame: couldn't write payload")
 	}
 
 	return nil
 }
 
-// WriteMessage writes a message into writer. A message is either a Request for
-// a Response
-func WriteMessage(writer io.Writer, msg interface{}) error {
-	data, err := json.Marshal(msg)
-	if err != nil {
-		return err
-	}
+// WriteCommand is a convenience wrapper around WriteFrame to send commands.
+func WriteCommand(w io.Writer, op Command, payload []byte) error {
+	return WriteFrame(w, NewFrame(TypeCommand, int(op), payload))
+}
 
-	buf := make([]byte, headerLength)
-	binary.BigEndian.PutUint32(buf[0:4], uint32(len(data)))
-	n, err := writer.Write(buf)
-	if err != nil {
-		return err
-	}
-	if n != headerLength {
-		return errors.New("couldn't write the full header")
-	}
+// WriteResponse is a convenience wrapper around WriteFrame to send responses.
+func WriteResponse(w io.Writer, op Command, inError bool, payload []byte) error {
+	frame := NewFrame(TypeResponse, int(op), payload)
+	frame.Header.InError = inError
+	return WriteFrame(w, frame)
+}
 
-	n, err = writer.Write(data)
-	if err != nil {
-		return err
-	}
-	if n != len(data) {
-		return errors.New("couldn't write the full data")
-	}
+// WriteStream is a convenience wrapper around WriteFrame to send stream packets.
+func WriteStream(w io.Writer, op Stream, payload []byte) error {
+	return WriteFrame(w, NewFrame(TypeStream, int(op), payload))
+}
 
-	return nil
+// WriteNotification is a convenience wrapper around WriteFrame to send notifications.
+func WriteNotification(w io.Writer, op Notification, payload []byte) error {
+	return WriteFrame(w, NewFrame(TypeNotification, int(op), payload))
 }

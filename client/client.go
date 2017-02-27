@@ -104,7 +104,6 @@ type RegisterVMOptions struct {
 //
 // See the api.RegisterVM and api.RegisterVMResponse payloads.
 type RegisterVMReturn struct {
-	Version int
 }
 
 // RegisterVM wraps the api.RegisterVM payload.
@@ -131,12 +130,7 @@ func (client *Client) RegisterVM(containerID, ctlSerial, ioSerial string,
 		return nil, err
 	}
 
-	ret := RegisterVMReturn{}
-	if err := json.Unmarshal(resp.Payload, &ret); err != nil {
-		return nil, err
-	}
-
-	return &ret, nil
+	return &RegisterVMReturn{}, nil
 }
 
 // AttachVMOptions holds extra arguments one can pass to the AttachVM function.
@@ -149,7 +143,6 @@ type AttachVMOptions struct {
 //
 // See the api.AttachVM and api.AttachVMResponse payloads.
 type AttachVMReturn struct {
-	Version int
 }
 
 // AttachVM wraps the api.AttachVM payload.
@@ -169,12 +162,7 @@ func (client *Client) AttachVM(containerID string, options *AttachVMOptions) (*A
 		return nil, err
 	}
 
-	ret := AttachVMReturn{}
-	if err := json.Unmarshal(resp.Payload, &ret); err != nil {
-		return nil, err
-	}
-
-	return &ret, nil
+	return &AttachVMReturn{}, nil
 }
 
 // Hyper wraps the Hyper payload (see payload description for more details)

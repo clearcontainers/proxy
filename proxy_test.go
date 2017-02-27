@@ -217,9 +217,6 @@ func TestRegisterVM(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, ret)
 
-	// Check that RegisterVM returns the protocol version.
-	assert.Equal(t, api.Version, ret.Version)
-
 	// A new RegisterVM message with the same containerID should error out.
 	_, err = rig.Client.RegisterVM(testContainerID, "fooCtl", "fooIo", nil)
 	assert.NotNil(t, err)
@@ -301,11 +298,8 @@ func TestAttachVM(t *testing.T) {
 	// Attaching to an existing VM should work. To test we are effectively
 	// attached, we issue an UnregisterVM that would error out if not
 	// attached.
-	ret, err := rig.Client.AttachVM(testContainerID, nil)
+	_, err = rig.Client.AttachVM(testContainerID, nil)
 	assert.Nil(t, err)
-
-	// Check that AttachVM returns the protocol version
-	assert.Equal(t, api.Version, ret.Version)
 
 	err = rig.Client.UnregisterVM(testContainerID)
 	assert.Nil(t, err)

@@ -40,11 +40,8 @@ type RegisterVM struct {
 // RegisterVMResponse is the result from a successful RegisterVM.
 //
 //  {
-//    "version": 1
 //  }
 type RegisterVMResponse struct {
-	// The version of the proxy protocol
-	Version int `json:"version"`
 }
 
 // The AttachVM payload can be used to associate clients to an already known
@@ -61,11 +58,8 @@ type AttachVM struct {
 // AttachVMResponse is the result from a successful AttachVM.
 //
 //  {
-//    "version": 1
 //  }
 type AttachVMResponse struct {
-	// Version is the version of the proxy protocol.
-	Version int `json:"version"`
 }
 
 // The UnregisterVM payload does the opposite of what RegisterVM does,

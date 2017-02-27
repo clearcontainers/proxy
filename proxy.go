@@ -124,8 +124,6 @@ func registerVMHandler(data []byte, userData interface{}, response *handlerRespo
 
 	client.vm = vm
 
-	response.AddResult("version", api.Version)
-
 	// We start one goroutine per-VM to monitor the qemu process
 	proxy.wg.Add(1)
 	go func() {
@@ -158,8 +156,6 @@ func attachVMHandler(data []byte, userData interface{}, response *handlerRespons
 	client.infof(1, "AttachVM(containerId=%s)", payload.ContainerID)
 
 	client.vm = vm
-
-	response.AddResult("version", api.Version)
 }
 
 // "UnregisterVM"

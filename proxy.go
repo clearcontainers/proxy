@@ -39,7 +39,8 @@ type proxy struct {
 	sync.Mutex
 
 	// proxy socket
-	listener net.Listener
+	listener   net.Listener
+	socketPath string
 
 	// vms are hashed by their containerID
 	vms map[string]*vm
@@ -228,6 +229,26 @@ var DefaultSocketPath string
 // ArgSocketPath is populated at runtime from the option -socket-path
 var ArgSocketPath = flag.String("socket-path", "", "specify path to socket file")
 
+// getSocketPath computes the path of the proxy socket. Note that when socket
+// activated, the socket path is specified in the systemd socket file but the
+// same value is set in DefaultSocketPath at link time.
+func getSocketPath() string {
+	// Invoking "go build" without any linker option will not
+	// populate DefaultSocketPath, so fallback to a reasonable
+	// path. People should really use the Makefile though.
+	if DefaultSocketPath == "" {
+		DefaultSocketPath = "/var/run/cc-oci-runtime/proxy.sock"
+	}
+
+	socketPath := DefaultSocketPath
+
+	if len(*ArgSocketPath) != 0 {
+		socketPath = *ArgSocketPath
+	}
+
+	return socketPath
+}
+
 func (proxy *proxy) init() error {
 	var l net.Listener
 	var err error
@@ -237,6 +258,7 @@ func (proxy *proxy) init() error {
 	proxy.enableVMConsole = v >= 3
 
 	// Open the proxy socket
+	proxy.socketPath = getSocketPath()
 	fds := listenFds()
 
 	if len(fds) > 1 {
@@ -247,35 +269,24 @@ func (proxy *proxy) init() error {
 		if err != nil {
 			return fmt.Errorf("couldn't listen on socket: %v", err)
 		}
+
 	} else {
-		// Invoking "go build" without any linker option will not
-		// populate DefaultSocketPath, so fallback to a reasonable
-		// path.
-		if DefaultSocketPath == "" {
-			DefaultSocketPath = "/var/run/cc-oci-runtime/proxy.sock"
-		}
-
-		socketPath := DefaultSocketPath
-		if len(*ArgSocketPath) != 0 {
-			socketPath = *ArgSocketPath
-		}
-
-		socketDir := filepath.Dir(socketPath)
+		socketDir := filepath.Dir(proxy.socketPath)
 		if err = os.MkdirAll(socketDir, 0750); err != nil {
 			return fmt.Errorf("couldn't create socket directory: %v", err)
 		}
-		if err = os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		if err = os.Remove(proxy.socketPath); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("couldn't remove exiting socket: %v", err)
 		}
-		l, err = net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
+		l, err = net.ListenUnix("unix", &net.UnixAddr{Name: proxy.socketPath, Net: "unix"})
 		if err != nil {
 			return fmt.Errorf("couldn't create AF_UNIX socket: %v", err)
 		}
-		if err = os.Chmod(socketPath, 0660|os.ModeSocket); err != nil {
+		if err = os.Chmod(proxy.socketPath, 0660|os.ModeSocket); err != nil {
 			return fmt.Errorf("couldn't set mode on socket: %v", err)
 		}
 
-		glog.V(1).Info("listening on ", socketPath)
+		glog.V(1).Info("listening on ", proxy.socketPath)
 	}
 
 	proxy.listener = l

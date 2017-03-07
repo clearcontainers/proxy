@@ -57,10 +57,13 @@ type vm struct {
 
 // A set of I/O streams between a client and a process running inside the VM
 type ioSession struct {
+	// token is what identifies the I/O session to the external world
+	token Token
+
 	nStreams int
 	ioBase   uint64
 
-	// id  of the client owning that ioSession
+	// id  of the client owning that ioSession (the shim process, usually).
 	clientID uint64
 
 	// socket connected to the fd sent over to the client
@@ -242,33 +245,40 @@ func (vm *vm) ioClientToHyper(session *ioSession) {
 	session.wg.Done()
 }
 
-func (vm *vm) AllocateIo(n int, clientID uint64, c net.Conn) uint64 {
-	// Allocate ioBase
+func (vm *vm) AllocateToken() (Token, error) {
 	vm.Lock()
+	defer vm.Unlock()
+
+	// We always allocate 2 sequence numbers (1 for stdin/out + 1 for
+	// stderr).
+	nStreams := 2
 	ioBase := vm.nextIoBase
-	vm.nextIoBase += uint64(n)
+	vm.nextIoBase += uint64(nStreams)
+
+	token, err := GenerateToken(32)
+	if err != nil {
+		return nilToken, err
+	}
 
 	session := &ioSession{
-		nStreams: n,
+		token:    token,
+		nStreams: nStreams,
 		ioBase:   ioBase,
-		clientID: clientID,
-		client:   c,
 	}
 
-	for i := 0; i < n; i++ {
+	for i := 0; i < nStreams; i++ {
 		vm.ioSessions[ioBase+uint64(i)] = session
 	}
-	vm.Unlock()
 
-	// Starts stdin forwarding between client and hyper
-	session.wg.Add(1)
-	go vm.ioClientToHyper(session)
-
-	return ioBase
+	return token, nil
 }
 
 func (session *ioSession) Close() {
-	session.client.Close()
+	// We can have a session created, but no shim associated with just yet.
+	// In that case, client is nil.
+	if session.client != nil {
+		session.client.Close()
+	}
 	session.wg.Wait()
 }
 

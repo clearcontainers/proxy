@@ -26,22 +26,49 @@ import (
 // console. The proxy can output this data when asked for verbose output.
 //
 //  {
-//   "containerId": "756535dc6e9ab9b560f84c8...",
-//   "ctlSerial": "/tmp/sh.hyper.channel.0.sock",
-//   "ioSerial": "/tmp/sh.hyper.channel.1.sock"
+//    "containerId": "756535dc6e9ab9b560f84c8...",
+//    "ctlSerial": "/tmp/sh.hyper.channel.0.sock",
+//    "ioSerial": "/tmp/sh.hyper.channel.1.sock",
+//    "numIOStreams: 1
 //  }
 type RegisterVM struct {
 	ContainerID string `json:"containerId"`
 	CtlSerial   string `json:"ctlSerial"`
 	IoSerial    string `json:"ioSerial"`
 	Console     string `json:"console,omitempty"`
+	// NumIOStreams asks for a number of I/O tokens. An I/O token
+	// represents the communication between a container process inside
+	// the VM and a shim process outside the VM. This communication
+	// includes I/O streams (stdin, out, err) but also signals, exit
+	// status, ...
+	// The response frame will contain NumIOStreams I/O tokens.
+	NumIOStreams int `json:"numIOStreams,omitempty"`
+}
+
+// IOResponse is the response data in RegisterVMResponse and AttachVMResponse
+// when the client is asking for I/O tokens from the proxy (NumIOStreams > 0).
+type IOResponse struct {
+	// URL is the URL a shim process should connect to in order to initiate
+	// the I/O communication with the process inside the VM
+	URL string
+	// IOTokens is a array of I/O tokens of length NumIOStreams. See
+	// RegisterVM for some details on I/O tokens.
+	Tokens []string `json:"tokens"`
 }
 
 // RegisterVMResponse is the result from a successful RegisterVM.
 //
 //  {
+//    "io": {
+//      "url": "unix:///run/clearcontainers/proxy.sock",
+//      "tokens": [
+//        "bwgxfmQj9uG3YCsFHrvontwDw41CJJ76Y7qVt4Bi9wc="
+//      ]
+//    }
 //  }
 type RegisterVMResponse struct {
+	// IO contains the proxy answer when asking for I/O tokens.
+	IO IOResponse `json:"io,omitempty"`
 }
 
 // The AttachVM payload can be used to associate clients to an already known
@@ -49,17 +76,29 @@ type RegisterVMResponse struct {
 // issued beforehand.
 //
 //  {
-//    "containerId": "756535dc6e9ab9b560f84c8..."
+//    "containerId": "756535dc6e9ab9b560f84c8...".
+//    "numIOStreams: 1
 //  }
 type AttachVM struct {
 	ContainerID string `json:"containerId"`
+	// NumIOStreams asks for a number of I/O tokens. See RegisterVM for
+	// some details on I/O tokens.
+	NumIOStreams int `json:"numIOStreams,omitempty"`
 }
 
 // AttachVMResponse is the result from a successful AttachVM.
 //
 //  {
+//    "io": {
+//      "url": "unix:///run/clearcontainers/proxy.sock",
+//      "tokens": [
+//        "bwgxfmQj9uG3YCsFHrvontwDw41CJJ76Y7qVt4Bi9wc="
+//      ]
+//    }
 //  }
 type AttachVMResponse struct {
+	// IO contains the proxy answer when asking for I/O tokens.
+	IO IOResponse `json:"io,omitempty"`
 }
 
 // The UnregisterVM payload does the opposite of what RegisterVM does,

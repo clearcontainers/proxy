@@ -23,6 +23,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -216,6 +217,9 @@ func TestRegisterVM(t *testing.T) {
 	ret, err := rig.Client.RegisterVM(testContainerID, ctlSocketPath, ioSocketPath, nil)
 	assert.Nil(t, err)
 	assert.NotNil(t, ret)
+	// We haven't asked for I/O tokens
+	assert.Equal(t, "", ret.IO.URL)
+	assert.Equal(t, 0, len(ret.IO.Tokens))
 
 	// A new RegisterVM message with the same containerID should error out.
 	_, err = rig.Client.RegisterVM(testContainerID, "fooCtl", "fooIo", nil)
@@ -298,8 +302,11 @@ func TestAttachVM(t *testing.T) {
 	// Attaching to an existing VM should work. To test we are effectively
 	// attached, we issue an UnregisterVM that would error out if not
 	// attached.
-	_, err = rig.Client.AttachVM(testContainerID, nil)
+	ret, err := rig.Client.AttachVM(testContainerID, nil)
 	assert.Nil(t, err)
+	// We haven't asked for I/O tokens
+	assert.Equal(t, "", ret.IO.URL)
+	assert.Equal(t, 0, len(ret.IO.Tokens))
 
 	err = rig.Client.UnregisterVM(testContainerID)
 	assert.Nil(t, err)
@@ -372,6 +379,61 @@ func TestHyperStartpod(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, startpod.Hostname, received.Hostname)
 	assert.Equal(t, startpod.ShareDir, received.ShareDir)
+
+	rig.Stop()
+}
+
+func TestRegisterVMAllocateTokens(t *testing.T) {
+	proto := newProtocol()
+	proto.Handle(api.CmdRegisterVM, registerVMHandler)
+
+	rig := newTestRig(t, proto)
+	rig.Start()
+
+	// Register new VM, asking for tokens
+	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
+	ret, err := rig.Client.RegisterVM(testContainerID, ctlSocketPath, ioSocketPath,
+		&goapi.RegisterVMOptions{NumIOStreams: 2})
+	assert.Nil(t, err)
+	assert.NotNil(t, ret)
+	assert.True(t, strings.HasPrefix(ret.IO.URL, "unix://"))
+	assert.Equal(t, 2, len(ret.IO.Tokens))
+
+	// This test shouldn't send anything to hyperstart.
+	msgs := rig.Hyperstart.GetLastMessages()
+	assert.Equal(t, 0, len(msgs))
+
+	rig.Stop()
+}
+
+func TestAttachVMAllocateTokens(t *testing.T) {
+	proto := newProtocol()
+	proto.Handle(api.CmdRegisterVM, registerVMHandler)
+	proto.Handle(api.CmdAttachVM, attachVMHandler)
+	proto.Handle(api.CmdUnregisterVM, unregisterVMHandler)
+
+	rig := newTestRig(t, proto)
+	rig.Start()
+
+	// Register new VM
+	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
+	_, err := rig.Client.RegisterVM(testContainerID, ctlSocketPath, ioSocketPath, nil)
+	assert.Nil(t, err)
+
+	// Attach to the VM, asking for tokens
+	ret, err := rig.Client.AttachVM(testContainerID, &goapi.AttachVMOptions{NumIOStreams: 2})
+	assert.Nil(t, err)
+	assert.NotNil(t, ret)
+	assert.True(t, strings.HasPrefix(ret.IO.URL, "unix://"))
+	assert.Equal(t, 2, len(ret.IO.Tokens))
+
+	// Cleanup
+	err = rig.Client.UnregisterVM(testContainerID)
+	assert.Nil(t, err)
+
+	// This test shouldn't send anything with hyperstart
+	msgs := rig.Hyperstart.GetLastMessages()
+	assert.Equal(t, 0, len(msgs))
 
 	rig.Stop()
 }

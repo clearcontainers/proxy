@@ -92,19 +92,31 @@ func errorFromResponse(resp *api.Frame) error {
 	return errors.New(decoded.Message)
 }
 
+func unmarshalResponse(resp *api.Frame, decoded interface{}) error {
+	if len(resp.Payload) == 0 {
+		return nil
+	}
+
+	if err := json.Unmarshal(resp.Payload, decoded); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // RegisterVMOptions holds extra arguments one can pass to the RegisterVM
 // function.
 //
 // See the api.RegisterVM payload for more details.
 type RegisterVMOptions struct {
-	Console string
+	Console      string
+	NumIOStreams int
 }
 
 // RegisterVMReturn contains the return values from RegisterVM.
 //
 // See the api.RegisterVM and api.RegisterVMResponse payloads.
-type RegisterVMReturn struct {
-}
+type RegisterVMReturn api.RegisterVMResponse
 
 // RegisterVM wraps the api.RegisterVM payload.
 //
@@ -119,6 +131,7 @@ func (client *Client) RegisterVM(containerID, ctlSerial, ioSerial string,
 
 	if options != nil {
 		payload.Console = options.Console
+		payload.NumIOStreams = options.NumIOStreams
 	}
 
 	resp, err := client.sendCommand(api.CmdRegisterVM, &payload)
@@ -130,20 +143,22 @@ func (client *Client) RegisterVM(containerID, ctlSerial, ioSerial string,
 		return nil, err
 	}
 
-	return &RegisterVMReturn{}, nil
+	decoded := RegisterVMReturn{}
+	err = unmarshalResponse(resp, &decoded)
+	return &decoded, err
 }
 
 // AttachVMOptions holds extra arguments one can pass to the AttachVM function.
 //
 // See the api.AttachVM payload for more details.
 type AttachVMOptions struct {
+	NumIOStreams int
 }
 
 // AttachVMReturn contains the return values from AttachVM.
 //
 // See the api.AttachVM and api.AttachVMResponse payloads.
-type AttachVMReturn struct {
-}
+type AttachVMReturn api.AttachVMResponse
 
 // AttachVM wraps the api.AttachVM payload.
 //
@@ -151,6 +166,10 @@ type AttachVMReturn struct {
 func (client *Client) AttachVM(containerID string, options *AttachVMOptions) (*AttachVMReturn, error) {
 	payload := api.AttachVM{
 		ContainerID: containerID,
+	}
+
+	if options != nil {
+		payload.NumIOStreams = options.NumIOStreams
 	}
 
 	resp, err := client.sendCommand(api.CmdAttachVM, &payload)
@@ -162,7 +181,9 @@ func (client *Client) AttachVM(containerID string, options *AttachVMOptions) (*A
 		return nil, err
 	}
 
-	return &AttachVMReturn{}, nil
+	decoded := AttachVMReturn{}
+	err = unmarshalResponse(resp, &decoded)
+	return &decoded, err
 }
 
 // Hyper wraps the Hyper payload (see payload description for more details)

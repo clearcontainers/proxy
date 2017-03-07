@@ -22,6 +22,7 @@ import (
 	"net"
 	"net/http"
 	_ "net/http/pprof"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -78,6 +79,32 @@ func (c *client) infof(lvl glog.Level, fmt string, a ...interface{}) {
 	glog.Infof("[client #%d] "+fmt, a...)
 }
 
+func (proxy *proxy) allocateTokens(vm *vm, numIOStreams int) (*api.IOResponse, error) {
+	if numIOStreams <= 0 {
+		return nil, nil
+	}
+
+	tokens := make([]string, 0, numIOStreams)
+
+	for i := 0; i < numIOStreams; i++ {
+		token, err := vm.AllocateToken()
+		if err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, string(token))
+	}
+
+	url := url.URL{
+		Scheme: "unix",
+		Path:   proxy.socketPath,
+	}
+
+	return &api.IOResponse{
+		URL:    url.String(),
+		Tokens: tokens,
+	}, nil
+}
+
 // "RegisterVM"
 func registerVMHandler(data []byte, userData interface{}, response *handlerResponse) {
 	client := userData.(*client)
@@ -113,6 +140,15 @@ func registerVMHandler(data []byte, userData interface{}, response *handlerRespo
 
 	if payload.Console != "" && proxy.enableVMConsole {
 		vm.setConsole(payload.Console)
+	}
+
+	io, err := proxy.allocateTokens(vm, payload.NumIOStreams)
+	if err != nil {
+		response.SetError(err)
+		return
+	}
+	if io != nil {
+		response.AddResult("io", io)
 	}
 
 	if err := vm.Connect(); err != nil {
@@ -152,6 +188,15 @@ func attachVMHandler(data []byte, userData interface{}, response *handlerRespons
 	if vm == nil {
 		response.SetErrorf("unknown containerID: %s", payload.ContainerID)
 		return
+	}
+
+	io, err := proxy.allocateTokens(vm, payload.NumIOStreams)
+	if err != nil {
+		response.SetError(err)
+		return
+	}
+	if io != nil {
+		response.AddResult("io", io)
 	}
 
 	client.infof(1, "AttachVM(containerId=%s)", payload.ContainerID)

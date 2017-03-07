@@ -138,7 +138,8 @@ func WriteFrame(w io.Writer, frame *Frame) error {
 	}
 
 	// Prepare the header.
-	buf := make([]byte, minHeaderLength)
+	len := minHeaderLength + header.PayloadLength
+	buf := make([]byte, len)
 	binary.BigEndian.PutUint16(buf[0:2], uint16(header.Version))
 	buf[2] = byte(header.HeaderLength / 4)
 	flags := byte(0)
@@ -149,26 +150,18 @@ func WriteFrame(w io.Writer, frame *Frame) error {
 	buf[7] = byte(header.Opcode)
 	binary.BigEndian.PutUint32(buf[8:8+4], uint32(header.PayloadLength))
 
-	// Write it.
+	// Write payload if needed
+	if header.PayloadLength > 0 {
+		copy(buf[minHeaderLength:], frame.Payload[0:header.PayloadLength])
+	}
+
 	n, err := w.Write(buf)
 	if err != nil {
 		return err
 	}
-	if n != minHeaderLength {
-		return errors.New("frame: couldn't write header")
-	}
 
-	// Write payload if needed
-	if header.PayloadLength == 0 {
-		return nil
-	}
-
-	n, err = w.Write(frame.Payload[0:header.PayloadLength])
-	if err != nil {
-		return err
-	}
-	if n != header.PayloadLength {
-		return errors.New("frame: couldn't write payload")
+	if n != len {
+		return errors.New("frame: couldn't write frame")
 	}
 
 	return nil

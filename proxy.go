@@ -106,7 +106,7 @@ func (proxy *proxy) allocateTokens(vm *vm, numIOStreams int) (*api.IOResponse, e
 }
 
 // "RegisterVM"
-func registerVMHandler(data []byte, userData interface{}, response *handlerResponse) {
+func registerVM(data []byte, userData interface{}, response *handlerResponse) {
 	client := userData.(*client)
 	payload := api.RegisterVM{}
 
@@ -171,7 +171,7 @@ func registerVMHandler(data []byte, userData interface{}, response *handlerRespo
 }
 
 // "attach"
-func attachVMHandler(data []byte, userData interface{}, response *handlerResponse) {
+func attachVM(data []byte, userData interface{}, response *handlerResponse) {
 	client := userData.(*client)
 	proxy := client.proxy
 
@@ -205,12 +205,12 @@ func attachVMHandler(data []byte, userData interface{}, response *handlerRespons
 }
 
 // "UnregisterVM"
-func unregisterVMHandler(data []byte, userData interface{}, response *handlerResponse) {
+func unregisterVM(data []byte, userData interface{}, response *handlerResponse) {
 	// UnregisterVM only affects the proxy.vms map and so removes the VM
 	// from the client visible API.
 	// vm.Close(), which tears down the VM object, is done at the end of
 	// the VM life cycle, when  we detect the qemu process is effectively
-	// gone (see RegisterVMHandler)
+	// gone (see RegisterVM)
 
 	client := userData.(*client)
 	proxy := client.proxy
@@ -240,7 +240,7 @@ func unregisterVMHandler(data []byte, userData interface{}, response *handlerRes
 }
 
 // "hyper"
-func hyperHandler(data []byte, userData interface{}, response *handlerResponse) {
+func hyper(data []byte, userData interface{}, response *handlerResponse) {
 	client := userData.(*client)
 	hyper := api.Hyper{}
 	vm := client.vm
@@ -367,10 +367,10 @@ func (proxy *proxy) serve() {
 
 	// Define the client (runtime/shim) <-> proxy protocol
 	proto := newProtocol()
-	proto.Handle(api.CmdRegisterVM, registerVMHandler)
-	proto.Handle(api.CmdAttachVM, attachVMHandler)
-	proto.Handle(api.CmdUnregisterVM, unregisterVMHandler)
-	proto.Handle(api.CmdHyper, hyperHandler)
+	proto.Handle(api.CmdRegisterVM, registerVM)
+	proto.Handle(api.CmdAttachVM, attachVM)
+	proto.Handle(api.CmdUnregisterVM, unregisterVM)
+	proto.Handle(api.CmdHyper, hyper)
 
 	glog.V(1).Info("proxy started")
 

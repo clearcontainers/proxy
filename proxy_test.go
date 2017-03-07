@@ -33,7 +33,7 @@ import (
 	goapi "github.com/clearcontainers/proxy/client"
 	"github.com/containers/virtcontainers/hyperstart/mock"
 
-	hyper "github.com/hyperhq/runv/hyperstart/api/json"
+	hyperapi "github.com/hyperhq/runv/hyperstart/api/json"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -94,7 +94,7 @@ func (rig *testRig) Start() {
 	// Explicitly send READY message from hyperstart mock
 	rig.wg.Add(1)
 	go func() {
-		rig.Hyperstart.SendMessage(int(hyper.INIT_READY), []byte{})
+		rig.Hyperstart.SendMessage(int(hyperapi.INIT_READY), []byte{})
 		rig.wg.Done()
 	}()
 
@@ -207,7 +207,7 @@ const testContainerID = "0987654321"
 
 func TestRegisterVM(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle(api.CmdRegisterVM, registerVMHandler)
+	proto.Handle(api.CmdRegisterVM, registerVM)
 
 	rig := newTestRig(t, proto)
 	rig.Start()
@@ -243,8 +243,8 @@ func TestRegisterVM(t *testing.T) {
 
 func TestUnregisterVM(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle(api.CmdRegisterVM, registerVMHandler)
-	proto.Handle(api.CmdUnregisterVM, unregisterVMHandler)
+	proto.Handle(api.CmdRegisterVM, registerVM)
+	proto.Handle(api.CmdUnregisterVM, unregisterVM)
 
 	rig := newTestRig(t, proto)
 	rig.Start()
@@ -283,9 +283,9 @@ func TestUnregisterVM(t *testing.T) {
 
 func TestAttachVM(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle(api.CmdRegisterVM, registerVMHandler)
-	proto.Handle(api.CmdAttachVM, attachVMHandler)
-	proto.Handle(api.CmdUnregisterVM, unregisterVMHandler)
+	proto.Handle(api.CmdRegisterVM, registerVM)
+	proto.Handle(api.CmdAttachVM, attachVM)
+	proto.Handle(api.CmdUnregisterVM, unregisterVM)
 
 	rig := newTestRig(t, proto)
 	rig.Start()
@@ -320,8 +320,8 @@ func TestAttachVM(t *testing.T) {
 
 func TestHyperPing(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle(api.CmdRegisterVM, registerVMHandler)
-	proto.Handle(api.CmdHyper, hyperHandler)
+	proto.Handle(api.CmdRegisterVM, registerVM)
+	proto.Handle(api.CmdHyper, hyper)
 
 	rig := newTestRig(t, proto)
 	rig.Start()
@@ -340,7 +340,7 @@ func TestHyperPing(t *testing.T) {
 	assert.Equal(t, 1, len(msgs))
 
 	msg := msgs[0]
-	assert.Equal(t, hyper.INIT_PING, int(msg.Code))
+	assert.Equal(t, hyperapi.INIT_PING, int(msg.Code))
 	assert.Equal(t, 0, len(msg.Message))
 
 	rig.Stop()
@@ -348,8 +348,8 @@ func TestHyperPing(t *testing.T) {
 
 func TestHyperStartpod(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle(api.CmdRegisterVM, registerVMHandler)
-	proto.Handle(api.CmdHyper, hyperHandler)
+	proto.Handle(api.CmdRegisterVM, registerVM)
+	proto.Handle(api.CmdHyper, hyper)
 
 	rig := newTestRig(t, proto)
 	rig.Start()
@@ -362,7 +362,7 @@ func TestHyperStartpod(t *testing.T) {
 	// Send startopd and verify we have indeed received the message on the
 	// hyperstart side. startpod is interesting because it's a case of an
 	// hyper message with JSON data.
-	startpod := hyper.Pod{
+	startpod := hyperapi.Pod{
 		Hostname: "testhostname",
 		ShareDir: "rootfs",
 	}
@@ -373,8 +373,8 @@ func TestHyperStartpod(t *testing.T) {
 	assert.Equal(t, 1, len(msgs))
 
 	msg := msgs[0]
-	assert.Equal(t, hyper.INIT_STARTPOD, int(msg.Code))
-	received := hyper.Pod{}
+	assert.Equal(t, hyperapi.INIT_STARTPOD, int(msg.Code))
+	received := hyperapi.Pod{}
 	err = json.Unmarshal(msg.Message, &received)
 	assert.Nil(t, err)
 	assert.Equal(t, startpod.Hostname, received.Hostname)
@@ -385,7 +385,7 @@ func TestHyperStartpod(t *testing.T) {
 
 func TestRegisterVMAllocateTokens(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle(api.CmdRegisterVM, registerVMHandler)
+	proto.Handle(api.CmdRegisterVM, registerVM)
 
 	rig := newTestRig(t, proto)
 	rig.Start()
@@ -408,9 +408,9 @@ func TestRegisterVMAllocateTokens(t *testing.T) {
 
 func TestAttachVMAllocateTokens(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle(api.CmdRegisterVM, registerVMHandler)
-	proto.Handle(api.CmdAttachVM, attachVMHandler)
-	proto.Handle(api.CmdUnregisterVM, unregisterVMHandler)
+	proto.Handle(api.CmdRegisterVM, registerVM)
+	proto.Handle(api.CmdAttachVM, attachVM)
+	proto.Handle(api.CmdUnregisterVM, unregisterVM)
 
 	rig := newTestRig(t, proto)
 	rig.Start()

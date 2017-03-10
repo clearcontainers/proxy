@@ -84,7 +84,8 @@ const (
 	CmdHyper
 	// CmdConnectShim identifies the client as a shim.
 	CmdConnectShim
-	// CmdDisconnectShim unregisters a shim.
+	// CmdDisconnectShim unregisters a shim. DisconnectShim is a bit
+	// special and doesn't send a Response back but closes the connection.
 	CmdDisconnectShim
 	// CmdSignal sends a signal to the process inside the VM. A client
 	// needs to be connected as a shim before it can issue that command.

@@ -33,6 +33,20 @@ import (
 	"github.com/golang/glog"
 )
 
+// tokenState  tracks if an I/O token has been claimed by a shim.
+type tokenState int
+
+const (
+	tokenStateAllocated tokenState = iota
+	tokenStateClaimed
+)
+
+// tokenInfo keeps track of per-token data
+type tokenInfo struct {
+	state tokenState
+	vm    *vm
+}
+
 // Main struct holding the proxy state
 type proxy struct {
 	// Protect concurrent accesses from separate client goroutines to this
@@ -46,11 +60,21 @@ type proxy struct {
 	// vms are hashed by their containerID
 	vms map[string]*vm
 
+	// tokenToVM maps I/O token to their per-token info
+	tokenToVM map[Token]*tokenInfo
+
 	// Output the VM console on stderr
 	enableVMConsole bool
 
 	wg sync.WaitGroup
 }
+
+type clientKind int
+
+const (
+	clientKindRuntime clientKind = 1 << iota
+	clientKindShim
+)
 
 // Represents a client, either a cc-oci-runtime or cc-shim process having
 // opened a socket to the proxy
@@ -58,6 +82,9 @@ type client struct {
 	id    uint64
 	proxy *proxy
 	vm    *vm
+
+	kind  clientKind
+	token Token // token is populated after a ConnectShim
 
 	conn net.Conn
 }
@@ -92,6 +119,12 @@ func (proxy *proxy) allocateTokens(vm *vm, numIOStreams int) (*api.IOResponse, e
 			return nil, err
 		}
 		tokens = append(tokens, string(token))
+		proxy.Lock()
+		proxy.tokenToVM[token] = &tokenInfo{
+			state: tokenStateAllocated,
+			vm:    vm,
+		}
+		proxy.Unlock()
 	}
 
 	url := url.URL{
@@ -103,6 +136,36 @@ func (proxy *proxy) allocateTokens(vm *vm, numIOStreams int) (*api.IOResponse, e
 		URL:    url.String(),
 		Tokens: tokens,
 	}, nil
+}
+
+func (proxy *proxy) claimToken(token Token) (*tokenInfo, error) {
+	proxy.Lock()
+	defer proxy.Unlock()
+
+	info := proxy.tokenToVM[token]
+	if info == nil {
+		return nil, fmt.Errorf("unknown token: %s", token)
+	}
+
+	if info.state == tokenStateClaimed {
+		return nil, fmt.Errorf("token already claimed: %s", token)
+	}
+
+	info.state = tokenStateClaimed
+
+	return info, nil
+}
+
+func (proxy *proxy) releaseToken(token Token) (*tokenInfo, error) {
+	proxy.Lock()
+	defer proxy.Unlock()
+
+	info := proxy.tokenToVM[token]
+	if info == nil {
+		return nil, fmt.Errorf("unknown token: %s", token)
+	}
+
+	return info, nil
 }
 
 // "RegisterVM"
@@ -261,9 +324,67 @@ func hyper(data []byte, userData interface{}, response *handlerResponse) {
 	response.SetError(err)
 }
 
+// "connectShim"
+func connectShim(data []byte, userData interface{}, response *handlerResponse) {
+	client := userData.(*client)
+	proxy := client.proxy
+
+	payload := api.ConnectShim{}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		response.SetError(err)
+		return
+	}
+
+	token := Token(payload.Token)
+	info, err := proxy.claimToken(token)
+	if err != nil {
+		response.SetError(err)
+		return
+	}
+
+	err = info.vm.AssociateShim(token, client.id, client.conn)
+	if err != nil {
+		response.SetError(err)
+		return
+	}
+
+	client.kind = clientKindShim
+	client.token = token
+
+	client.infof(1, "ConnectShim(token=%s)", payload.Token)
+}
+
+// "disconnectShim"
+func disconnectShim(data []byte, userData interface{}, response *handlerResponse) {
+	client := userData.(*client)
+	proxy := client.proxy
+
+	if client.kind != clientKindShim {
+		response.SetErrorMsg("client isn't a shim")
+		return
+	}
+
+	info, err := proxy.releaseToken(client.token)
+	if err != nil {
+		response.SetError(err)
+		return
+	}
+
+	err = info.vm.FreeToken(client.token)
+	if err != nil {
+		response.SetError(err)
+		return
+	}
+
+	client.token = ""
+
+	client.infof(1, "DisonnectShim()")
+}
+
 func newProxy() *proxy {
 	return &proxy{
-		vms: make(map[string]*vm),
+		vms:       make(map[string]*vm),
+		tokenToVM: make(map[Token]*tokenInfo),
 	}
 }
 
@@ -371,6 +492,8 @@ func (proxy *proxy) serve() {
 	proto.Handle(api.CmdAttachVM, attachVM)
 	proto.Handle(api.CmdUnregisterVM, unregisterVM)
 	proto.Handle(api.CmdHyper, hyper)
+	proto.Handle(api.CmdConnectShim, connectShim)
+	proto.Handle(api.CmdDisconnectShim, disconnectShim)
 
 	glog.V(1).Info("proxy started")
 

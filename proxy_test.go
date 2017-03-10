@@ -438,6 +438,48 @@ func TestAttachVMAllocateTokens(t *testing.T) {
 	rig.Stop()
 }
 
+func TestConnectShim(t *testing.T) {
+	proto := newProtocol()
+	proto.Handle(api.CmdRegisterVM, registerVM)
+	proto.Handle(api.CmdConnectShim, connectShim)
+	proto.Handle(api.CmdDisconnectShim, disconnectShim)
+
+	rig := newTestRig(t, proto)
+	rig.Start()
+
+	// Register new VM, asking for tokens. We use the assumption the same
+	// connection can be used for ConnectShim, which is true in the tests.
+	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
+	ret, err := rig.Client.RegisterVM(testContainerID, ctlSocketPath, ioSocketPath,
+		&goapi.RegisterVMOptions{NumIOStreams: 1})
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(ret.IO.Tokens))
+	token := ret.IO.Tokens[0]
+
+	// Using a bad token should result in an error
+	err = rig.Client.ConnectShim("notatoken")
+	assert.NotNil(t, err)
+
+	// Register shim with an existing token, all should be good
+	err = rig.Client.ConnectShim(token)
+	assert.Nil(t, err)
+
+	// Trying to re-use a token that a process has already claimed should
+	// result in an error.
+	err = rig.Client.ConnectShim(token)
+	assert.NotNil(t, err)
+
+	// Cleanup
+	err = rig.Client.DisconnectShim()
+	assert.Nil(t, err)
+
+	// This test shouldn't send anything to hyperstart.
+	msgs := rig.Hyperstart.GetLastMessages()
+	assert.Equal(t, 0, len(msgs))
+
+	rig.Stop()
+}
+
 // header for hyperstart's I/O channel packets is 12 bytes
 const ioHeaderLength = 12
 

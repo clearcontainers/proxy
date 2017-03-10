@@ -130,6 +130,21 @@ type Hyper struct {
 	Data      json.RawMessage `json:"data,omitempty"`
 }
 
+// ConnectShim identifies a shim against the proxy. A shim process is a process
+// running on host shadowing a container process running inside the VM. A shim
+// will forward stdin and signals to the process inside the VM and will receive
+// stdout, stderr and the exit status.
+type ConnectShim struct {
+	// Token is id corresponding to the process the shim wants to handle
+	// the I/O streams, signals, exit status for. Tokens are allocated with
+	// a call to RegisterVM or AttachVM.
+	Token string `json:"token"`
+}
+
+// DisconnectShim unregister a shim from the proxy.
+type DisconnectShim struct {
+}
+
 // ErrorResponse is the payload send in Responses where the Error flag is set.
 type ErrorResponse struct {
 	Message string `json:"msg"`

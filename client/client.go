@@ -43,7 +43,8 @@ func (client *Client) Close() {
 	client.conn.Close()
 }
 
-func (client *Client) sendCommand(cmd api.Command, payload interface{}) (*api.Frame, error) {
+func (client *Client) sendCommandFull(cmd api.Command, payload interface{},
+	waitForResponse bool) (*api.Frame, error) {
 	var data []byte
 	var frame *api.Frame
 	var err error
@@ -56,6 +57,10 @@ func (client *Client) sendCommand(cmd api.Command, payload interface{}) (*api.Fr
 
 	if err := api.WriteCommand(client.conn, cmd, data); err != nil {
 		return nil, err
+	}
+
+	if !waitForResponse {
+		return nil, nil
 	}
 
 	if frame, err = api.ReadFrame(client.conn); err != nil {
@@ -71,6 +76,15 @@ func (client *Client) sendCommand(cmd api.Command, payload interface{}) (*api.Fr
 	}
 
 	return frame, nil
+}
+
+func (client *Client) sendCommand(cmd api.Command, payload interface{}) (*api.Frame, error) {
+	return client.sendCommandFull(cmd, payload, true)
+}
+
+func (client *Client) sendCommandNoResponse(cmd api.Command, payload interface{}) error {
+	_, err := client.sendCommandFull(cmd, payload, false)
+	return err
 }
 
 func errorFromResponse(resp *api.Frame) error {
@@ -226,4 +240,25 @@ func (client *Client) UnregisterVM(containerID string) error {
 	}
 
 	return errorFromResponse(resp)
+}
+
+// ConnectShim wraps the api.CmdConnectShim command and associated
+// api.ConnectShim payload.
+func (client *Client) ConnectShim(token string) error {
+	payload := api.ConnectShim{
+		Token: token,
+	}
+
+	resp, err := client.sendCommand(api.CmdConnectShim, &payload)
+	if err != nil {
+		return err
+	}
+
+	return errorFromResponse(resp)
+}
+
+// DisconnectShim wraps the api.CmdDisconnectShim command and associated
+// api.DisconnectShim payload.
+func (client *Client) DisconnectShim() error {
+	return client.sendCommandNoResponse(api.CmdDisconnectShim, nil)
 }

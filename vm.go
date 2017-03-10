@@ -48,6 +48,9 @@ type vm struct {
 	// numbers appear in this map.
 	ioSessions map[uint64]*ioSession
 
+	// tokenToSession associate a token to the correspoding ioSession
+	tokenToSession map[Token]*ioSession
+
 	// Used to wait for all VM-global goroutines to finish on Close()
 	wg sync.WaitGroup
 
@@ -78,11 +81,12 @@ func newVM(id, ctlSerial, ioSerial string) *vm {
 	h := hyperstart.NewHyperstart(ctlSerial, ioSerial, "unix")
 
 	return &vm{
-		containerID:  id,
-		hyperHandler: h,
-		nextIoBase:   1,
-		ioSessions:   make(map[uint64]*ioSession),
-		vmLost:       make(chan interface{}),
+		containerID:    id,
+		hyperHandler:   h,
+		nextIoBase:     1,
+		ioSessions:     make(map[uint64]*ioSession),
+		tokenToSession: make(map[Token]*ioSession),
+		vmLost:         make(chan interface{}),
 	}
 }
 
@@ -124,11 +128,18 @@ func (vm *vm) dump(lvl glog.Level, data []byte) {
 	glog.Infof("\n%s", hex.Dump(data))
 }
 
-func (vm *vm) findSession(seq uint64) *ioSession {
+func (vm *vm) findSessionBySeq(seq uint64) *ioSession {
 	vm.Lock()
 	defer vm.Unlock()
 
 	return vm.ioSessions[seq]
+}
+
+func (vm *vm) findSessionByToken(token Token) *ioSession {
+	vm.Lock()
+	defer vm.Unlock()
+
+	return vm.tokenToSession[token]
 }
 
 // This function runs in a goroutine, reading data from the io channel and
@@ -141,7 +152,7 @@ func (vm *vm) ioHyperToClients() {
 			break
 		}
 
-		session := vm.findSession(msg.Session)
+		session := vm.findSessionBySeq(msg.Session)
 		if session == nil {
 			fmt.Fprintf(os.Stderr,
 				"couldn't find client with seq number %d\n", msg.Session)
@@ -266,11 +277,64 @@ func (vm *vm) AllocateToken() (Token, error) {
 		ioBase:   ioBase,
 	}
 
+	// This mapping is to get the session from the seq number in an
+	// hyperstart I/O paquet.
 	for i := 0; i < nStreams; i++ {
 		vm.ioSessions[ioBase+uint64(i)] = session
 	}
 
+	// This mapping is to get the session from the I/O token
+	vm.tokenToSession[token] = session
+
 	return token, nil
+}
+
+// AssociateShim associates a shim given by the triplet (token, cliendID,
+// clientConn) to a vm (POD). After associating the shim, a hyper command can
+// be issued to start the process inside the VM and data can flow between shim
+// and containerized process through the shim.
+func (vm *vm) AssociateShim(token Token, clientID uint64, clientConn net.Conn) error {
+	vm.Lock()
+	defer vm.Unlock()
+
+	session := vm.tokenToSession[token]
+	if session == nil {
+		return fmt.Errorf("vm: unknown token %s", token)
+	}
+
+	session.clientID = clientID
+	session.client = clientConn
+
+	// Starts stdin forwarding between client and hyper
+	// session.wg.Add(1)
+	// go vm.ioClientToHyper(session)
+
+	return nil
+}
+
+func (vm *vm) freeTokenUnlocked(token Token) error {
+	session := vm.tokenToSession[token]
+	if session == nil {
+		return fmt.Errorf("vm: unknown token %s", token)
+	}
+
+	delete(vm.tokenToSession, token)
+
+	for i := 0; i < session.nStreams; i++ {
+		delete(vm.ioSessions, session.ioBase+uint64(i))
+	}
+
+	// this will wait for the per-I/O session goroutine(s) to finish
+	session.Close()
+
+	return nil
+}
+
+func (vm *vm) FreeToken(token Token) error {
+	vm.Lock()
+	defer vm.Unlock()
+
+	return vm.freeTokenUnlocked(token)
 }
 
 func (session *ioSession) Close() {
@@ -288,15 +352,12 @@ func (vm *vm) Close() {
 		vm.console.conn.Close()
 	}
 
-	// Wait for per-client goroutines
+	// Garbage collect I/O sessions in case Close() was called without
+	// properly cleaning up all sessions.
 	vm.Lock()
-	for seq, session := range vm.ioSessions {
-		delete(vm.ioSessions, seq)
-		if seq != session.ioBase {
-			continue
-		}
-
-		session.Close()
+	for token := range vm.tokenToSession {
+		vm.freeTokenUnlocked(token)
+		delete(vm.tokenToSession, token)
 	}
 	vm.Unlock()
 

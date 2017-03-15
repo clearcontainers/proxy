@@ -114,19 +114,26 @@ type UnregisterVM struct {
 
 // The Hyper payload will forward an hyperstart command to hyperstart.
 //
+// Note: the newcontainer and execmd hyperstart commands start one or more
+// processes. When sending those commands, tokens acquired through either
+// RegisterVM or AttachVM need to be sent along in the tokens array. The number
+// of tokens sent has to match the number of processes to be started.
+//
 //  {
-//    "id": "hyper",
+//    "hyperName": "newcontainer",
+//    "tokens": [
+//      "bwgxfmQj9uG3YCsFHrvontwDw41CJJ76Y7qVt4Bi9wc="
+//    ],
 //    "data": {
-//      "hyperName": "startpod",
-//      "data": {
-//        "hostname": "clearlinux",
-//        "containers": [],
-//        "shareDir": "rootfs"
+//      "id": "756535dc6e9ab9b560f84c8...",
+//      "rootfs": "/foo/bar",
+//      ...
 //      }
 //    }
 //  }
 type Hyper struct {
 	HyperName string          `json:"hyperName"`
+	Tokens    []string        `json:"tokens"`
 	Data      json.RawMessage `json:"data,omitempty"`
 }
 

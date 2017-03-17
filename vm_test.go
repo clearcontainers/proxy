@@ -202,3 +202,17 @@ func TestHyperRelocationExeccmd(t *testing.T) {
 	rig.Stop()
 
 }
+
+func TestRelocateInteractiveProcess(t *testing.T) {
+	process := &hyperapi.Process{
+		Args:     []string{"/bin/sh"},
+		Terminal: true,
+	}
+	session := &ioSession{
+		ioBase: 64,
+	}
+
+	relocateProcess(process, session)
+	assert.NotEqual(t, uint64(0), process.Stdio)
+	assert.Equal(t, uint64(0), process.Stderr)
+}

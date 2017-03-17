@@ -228,7 +228,13 @@ type relocationHandler func(*vm, *api.Hyper) error
 
 func relocateProcess(process *hyperapi.Process, session *ioSession) {
 	process.Stdio = session.ioBase
-	process.Stderr = session.ioBase + 1
+
+	// When relocating a process asking for a terminal, we need to make sure
+	// Process.Stderr is 0. We only need the Stdio sequence number in that case and
+	// hyperstart will be mad at us if we specify Stderr.
+	if process.Terminal == false {
+		process.Stderr = session.ioBase + 1
+	}
 }
 
 func execcmdHandler(vm *vm, hyper *api.Hyper) error {

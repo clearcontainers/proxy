@@ -226,7 +226,15 @@ func (vm *vm) Connect() error {
 
 type relocationHandler func(*vm, *api.Hyper) error
 
-func relocateProcess(process *hyperapi.Process, session *ioSession) {
+func relocateProcess(process *hyperapi.Process, session *ioSession) error {
+	// Make sure clients don't prefill process.Stdio and proces.Stderr
+	if process.Stdio != 0 {
+		return fmt.Errorf("expected process.Stdio to be 0, got %d", process.Stdio)
+	}
+	if process.Stderr != 0 {
+		return fmt.Errorf("expected process.Stderr to be 0, got %d", process.Stderr)
+	}
+
 	process.Stdio = session.ioBase
 
 	// When relocating a process asking for a terminal, we need to make sure
@@ -235,6 +243,8 @@ func relocateProcess(process *hyperapi.Process, session *ioSession) {
 	if process.Terminal == false {
 		process.Stderr = session.ioBase + 1
 	}
+
+	return nil
 }
 
 func execcmdHandler(vm *vm, hyper *api.Hyper) error {
@@ -254,7 +264,10 @@ func execcmdHandler(vm *vm, hyper *api.Hyper) error {
 		return fmt.Errorf("unknown token %s", token)
 	}
 
-	relocateProcess(&cmdIn.Process, session)
+	if err := relocateProcess(&cmdIn.Process, session); err != nil {
+		return err
+	}
+
 	newData, err := json.Marshal(&cmdIn)
 	if err != nil {
 		return err

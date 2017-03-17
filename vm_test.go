@@ -203,6 +203,25 @@ func TestHyperRelocationExeccmd(t *testing.T) {
 
 }
 
+func TestRelocateProcessNonZeroSequenceNumbers(t *testing.T) {
+	process := &hyperapi.Process{
+		Args: []string{"/bin/sh"},
+	}
+	session := &ioSession{
+		ioBase: 64,
+	}
+
+	process.Stdio = 128
+	process.Stderr = 0
+	err := relocateProcess(process, session)
+	assert.NotNil(t, err)
+
+	process.Stdio = 0
+	process.Stderr = 128
+	err = relocateProcess(process, session)
+	assert.NotNil(t, err)
+}
+
 func TestRelocateInteractiveProcess(t *testing.T) {
 	process := &hyperapi.Process{
 		Args:     []string{"/bin/sh"},
@@ -212,7 +231,8 @@ func TestRelocateInteractiveProcess(t *testing.T) {
 		ioBase: 64,
 	}
 
-	relocateProcess(process, session)
+	err := relocateProcess(process, session)
+	assert.Nil(t, err)
 	assert.NotEqual(t, uint64(0), process.Stdio)
 	assert.Equal(t, uint64(0), process.Stderr)
 }

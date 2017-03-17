@@ -17,13 +17,17 @@ package main
 import (
 	"bufio"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"sync"
 
+	"github.com/clearcontainers/proxy/api"
+
 	"github.com/containers/virtcontainers/hyperstart"
 	"github.com/golang/glog"
+	hyperapi "github.com/hyperhq/runv/hyperstart/api/json"
 )
 
 // Represents a single qemu/hyperstart instance on the system
@@ -220,8 +224,100 @@ func (vm *vm) Connect() error {
 	return nil
 }
 
-func (vm *vm) SendMessage(cmd string, data []byte) error {
-	_, err := vm.hyperHandler.SendCtlMessage(cmd, data)
+type relocationHandler func(*vm, *api.Hyper) error
+
+func relocateProcess(process *hyperapi.Process, session *ioSession) {
+	process.Stdio = session.ioBase
+	process.Stderr = session.ioBase + 1
+}
+
+func execcmdHandler(vm *vm, hyper *api.Hyper) error {
+	nTokens := len(hyper.Tokens)
+	if nTokens != 1 {
+		return fmt.Errorf("expected 1 token, got %d", nTokens)
+	}
+
+	cmdIn := hyperapi.ExecCommand{}
+	if err := json.Unmarshal(hyper.Data, &cmdIn); err != nil {
+		return err
+	}
+
+	token := hyper.Tokens[0]
+	session := vm.findSessionByToken(Token(token))
+	if session == nil {
+		return fmt.Errorf("unknown token %s", token)
+	}
+
+	relocateProcess(&cmdIn.Process, session)
+	newData, err := json.Marshal(&cmdIn)
+	if err != nil {
+		return err
+	}
+
+	hyper.Data = newData
+
+	return nil
+}
+
+func newcontainerHandler(vm *vm, hyper *api.Hyper) error {
+	nTokens := len(hyper.Tokens)
+	if nTokens != 1 {
+		return fmt.Errorf("expected 1 token, got %d", nTokens)
+	}
+
+	cmdIn := hyperapi.Container{}
+	if err := json.Unmarshal(hyper.Data, &cmdIn); err != nil {
+		return err
+	}
+
+	token := hyper.Tokens[0]
+	session := vm.findSessionByToken(Token(token))
+	if session == nil {
+		return fmt.Errorf("unknown token %s", token)
+	}
+
+	relocateProcess(cmdIn.Process, session)
+	newData, err := json.Marshal(&cmdIn)
+	if err != nil {
+		return err
+	}
+
+	hyper.Data = newData
+
+	return nil
+}
+
+// RelocateHyperCommand performs the sequence number relocation in the
+// newcontainer and execmd hyper commands given the corresponding list of
+// tokens. Starpod isn't handled as it's not currently use to start processes
+// and indicated as deprecated in the hyperstart API.
+func (vm *vm) relocateHyperCommand(hyper *api.Hyper) error {
+	cmds := []struct {
+		name    string
+		handler relocationHandler
+	}{
+		{"newcontainer", newcontainerHandler},
+		{"execcmd", execcmdHandler},
+	}
+
+	for _, cmd := range cmds {
+		if hyper.HyperName == cmd.name {
+			if err := cmd.handler(vm, hyper); err != nil {
+				return err
+			}
+			break
+		}
+	}
+
+	return nil
+}
+
+func (vm *vm) SendMessage(hyper *api.Hyper) error {
+	if err := vm.relocateHyperCommand(hyper); err != nil {
+		return err
+	}
+
+	_, err := vm.hyperHandler.SendCtlMessage(hyper.HyperName, hyper.Data)
 	return err
 }
 

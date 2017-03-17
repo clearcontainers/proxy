@@ -320,7 +320,7 @@ func hyper(data []byte, userData interface{}, response *handlerResponse) {
 
 	client.infof(1, "hyper(cmd=%s, data=%s)", hyper.HyperName, hyper.Data)
 
-	err := vm.SendMessage(hyper.HyperName, hyper.Data)
+	err := vm.SendMessage(&hyper)
 	response.SetError(err)
 }
 

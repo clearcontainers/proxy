@@ -79,7 +79,7 @@ echo "Running go vet..."
 go vet $go_packages
 
 echo "Running gofmt..."
-gofmt -s -l $go_files | tee /dev/tty | \
+gofmt -s -d -l $go_files | tee /dev/tty | \
     wc -l | xargs -I % bash -c "test % -eq 0"
 
 echo "Running cyclo..."

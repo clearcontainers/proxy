@@ -480,6 +480,51 @@ func TestConnectShim(t *testing.T) {
 	rig.Stop()
 }
 
+// Relocations are thoroughly tested in vm_test.go, this is just to ensure we
+// have coverage at a higher level.
+func TestHyperSequenceNumberRelocation(t *testing.T) {
+	proto := newProtocol()
+	proto.Handle(api.CmdRegisterVM, registerVM)
+	proto.Handle(api.CmdConnectShim, connectShim)
+	proto.Handle(api.CmdHyper, hyper)
+
+	rig := newTestRig(t, proto)
+	rig.Start()
+
+	// Register new VM, asking for tokens. We use the assumption the same
+	// connection can be used for ConnectShim, which is true in the tests.
+	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
+	ret, err := rig.Client.RegisterVM(
+		testContainerID, ctlSocketPath, ioSocketPath,
+		&goapi.RegisterVMOptions{NumIOStreams: 1})
+	assert.Nil(t, err)
+	tokens := ret.IO.Tokens
+	assert.Equal(t, 1, len(tokens))
+
+	// Send newcontainer hyper command
+	newcontainer := hyperapi.Container{
+		Id: testContainerID,
+		Process: &hyperapi.Process{
+			Args: []string{"/bin/sh"},
+		},
+	}
+	err = rig.Client.HyperWithTokens("newcontainer", tokens, &newcontainer)
+	assert.Nil(t, err)
+
+	// Verify hyperstart has received the message with relocation
+	msgs := rig.Hyperstart.GetLastMessages()
+	assert.Equal(t, 1, len(msgs))
+	msg := msgs[0]
+	assert.Equal(t, uint32(hyperapi.INIT_NEWCONTAINER), msg.Code)
+	payload := hyperapi.Container{}
+	err = json.Unmarshal(msg.Message, &payload)
+	assert.Nil(t, err)
+	assert.NotEqual(t, 0, payload.Process.Stdio)
+	assert.NotEqual(t, 0, payload.Process.Stderr)
+
+	rig.Stop()
+}
+
 // header for hyperstart's I/O channel packets is 12 bytes
 const ioHeaderLength = 12
 

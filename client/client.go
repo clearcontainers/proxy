@@ -202,6 +202,13 @@ func (client *Client) AttachVM(containerID string, options *AttachVMOptions) (*A
 
 // Hyper wraps the Hyper payload (see payload description for more details)
 func (client *Client) Hyper(hyperName string, hyperMessage interface{}) error {
+	return client.HyperWithTokens(hyperName, nil, hyperMessage)
+}
+
+// HyperWithTokens is a Hyper variant where the users can specify a list of I/O tokens.
+//
+// See the api.Hyper payload description for more details.
+func (client *Client) HyperWithTokens(hyperName string, tokens []string, hyperMessage interface{}) error {
 	var data []byte
 
 	if hyperMessage != nil {
@@ -216,6 +223,10 @@ func (client *Client) Hyper(hyperName string, hyperMessage interface{}) error {
 	hyper := api.Hyper{
 		HyperName: hyperName,
 		Data:      data,
+	}
+
+	if tokens != nil {
+		hyper.Tokens = tokens
 	}
 
 	resp, err := client.sendCommand(api.CmdHyper, &hyper)

@@ -318,14 +318,25 @@ func (vm *vm) relocateHyperCommand(hyper *api.Hyper) error {
 		{"newcontainer", newcontainerHandler},
 		{"execcmd", execcmdHandler},
 	}
+	needsRelocation := false
 
 	for _, cmd := range cmds {
 		if hyper.HyperName == cmd.name {
 			if err := cmd.handler(vm, hyper); err != nil {
 				return err
 			}
+			needsRelocation = true
 			break
 		}
+	}
+
+	// If a hyper command doesn't need a token but one is given anyway, reject the
+	// command.
+	numTokens := len(hyper.Tokens)
+	if !needsRelocation && numTokens > 0 {
+		return fmt.Errorf("%s doesn't need tokens but %d token(s) were given",
+			hyper.HyperName, numTokens)
+
 	}
 
 	return nil

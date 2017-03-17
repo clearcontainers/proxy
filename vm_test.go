@@ -203,6 +203,26 @@ func TestHyperRelocationExeccmd(t *testing.T) {
 
 }
 
+// A command that doesn't require tokens should error out if one is supplied
+// anyway.
+func TestHyperRelocationPing(t *testing.T) {
+	rig := newVMRig(t)
+	rig.Start()
+
+	vm := rig.CreateVM()
+
+	// Relocate a ping command, giving 1 token as it should be (onky
+	// 1 process can be spawned using execcmd.
+	cmd := rig.createHyperCmd(vm, "ping", 1, nil)
+	originalCmd := *cmd
+	err := vm.relocateHyperCommand(cmd)
+	assert.NotNil(t, err)
+	assert.Equal(t, originalCmd, *cmd)
+
+	vm.Close()
+	rig.Stop()
+}
+
 func TestRelocateProcessNonZeroSequenceNumbers(t *testing.T) {
 	process := &hyperapi.Process{
 		Args: []string{"/bin/sh"},

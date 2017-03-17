@@ -15,11 +15,9 @@
 package main
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -523,49 +521,4 @@ func TestHyperSequenceNumberRelocation(t *testing.T) {
 	assert.NotEqual(t, 0, payload.Process.Stderr)
 
 	rig.Stop()
-}
-
-// header for hyperstart's I/O channel packets is 12 bytes
-const ioHeaderLength = 12
-
-// write a chunk of data to an I/O fd
-func writeIo(t *testing.T, writer io.Writer, seq uint64, data []byte) {
-	length := ioHeaderLength + len(data)
-	header := make([]byte, ioHeaderLength)
-
-	binary.BigEndian.PutUint64(header[:], uint64(seq))
-	binary.BigEndian.PutUint32(header[8:], uint32(length))
-	n, err := writer.Write(header)
-	assert.Nil(t, err)
-	assert.Equal(t, ioHeaderLength, n)
-
-	n, err = writer.Write(data)
-	assert.Nil(t, err)
-	assert.Equal(t, len(data), n)
-}
-
-// read a chunk of data from an I/O fd
-func readIo(t *testing.T, reader io.Reader) (seq uint64, data []byte) {
-	buf := make([]byte, ioHeaderLength)
-	n, err := reader.Read(buf)
-	assert.Nil(t, err)
-	assert.Equal(t, ioHeaderLength, n)
-
-	seq = binary.BigEndian.Uint64(buf[:8])
-	length := binary.BigEndian.Uint32(buf[8:12]) - ioHeaderLength
-	if length == 0 {
-		return
-	}
-
-	received := 0
-	need := int(length)
-	data = make([]byte, need)
-	for received < need {
-		n, err := reader.Read(data[received:need])
-		assert.Nil(t, err)
-
-		received += n
-	}
-
-	return
 }

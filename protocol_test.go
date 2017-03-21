@@ -89,7 +89,7 @@ func userDataHandler(data []byte, userData interface{}, response *handlerRespons
 
 func TestUserData(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle(api.Command(0), userDataHandler)
+	proto.HandleCommand(api.Command(0), userDataHandler)
 
 	server := newMockServer(t, proto)
 	client := server.GetClientConn()
@@ -144,10 +144,10 @@ func TestProtocol(t *testing.T) {
 	}
 
 	proto := newProtocol()
-	proto.Handle(api.Command(0), simpleHandler)
-	proto.Handle(api.Command(1), returnDataHandler)
-	proto.Handle(api.Command(2), returnErrorHandler)
-	proto.Handle(api.Command(3), echoHandler)
+	proto.HandleCommand(api.Command(0), simpleHandler)
+	proto.HandleCommand(api.Command(1), returnDataHandler)
+	proto.HandleCommand(api.Command(2), returnErrorHandler)
+	proto.HandleCommand(api.Command(3), echoHandler)
 
 	client, _ := setupMockServer(t, proto)
 
@@ -168,7 +168,7 @@ func TestProtocol(t *testing.T) {
 // Make sure the server closes the connection when encountering an error
 func TestCloseOnError(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle(api.Command(0), simpleHandler)
+	proto.HandleCommand(api.Command(0), simpleHandler)
 
 	client, _ := setupMockServer(t, proto)
 

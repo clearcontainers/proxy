@@ -137,7 +137,7 @@ const testContainerID = "0987654321"
 
 func TestRegisterVM(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle(api.CmdRegisterVM, registerVM)
+	proto.HandleCommand(api.CmdRegisterVM, registerVM)
 
 	rig := newTestRig(t, proto)
 	rig.Start()
@@ -173,8 +173,8 @@ func TestRegisterVM(t *testing.T) {
 
 func TestUnregisterVM(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle(api.CmdRegisterVM, registerVM)
-	proto.Handle(api.CmdUnregisterVM, unregisterVM)
+	proto.HandleCommand(api.CmdRegisterVM, registerVM)
+	proto.HandleCommand(api.CmdUnregisterVM, unregisterVM)
 
 	rig := newTestRig(t, proto)
 	rig.Start()
@@ -213,9 +213,9 @@ func TestUnregisterVM(t *testing.T) {
 
 func TestAttachVM(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle(api.CmdRegisterVM, registerVM)
-	proto.Handle(api.CmdAttachVM, attachVM)
-	proto.Handle(api.CmdUnregisterVM, unregisterVM)
+	proto.HandleCommand(api.CmdRegisterVM, registerVM)
+	proto.HandleCommand(api.CmdAttachVM, attachVM)
+	proto.HandleCommand(api.CmdUnregisterVM, unregisterVM)
 
 	rig := newTestRig(t, proto)
 	rig.Start()
@@ -250,8 +250,8 @@ func TestAttachVM(t *testing.T) {
 
 func TestHyperPing(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle(api.CmdRegisterVM, registerVM)
-	proto.Handle(api.CmdHyper, hyper)
+	proto.HandleCommand(api.CmdRegisterVM, registerVM)
+	proto.HandleCommand(api.CmdHyper, hyper)
 
 	rig := newTestRig(t, proto)
 	rig.Start()
@@ -278,8 +278,8 @@ func TestHyperPing(t *testing.T) {
 
 func TestHyperStartpod(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle(api.CmdRegisterVM, registerVM)
-	proto.Handle(api.CmdHyper, hyper)
+	proto.HandleCommand(api.CmdRegisterVM, registerVM)
+	proto.HandleCommand(api.CmdHyper, hyper)
 
 	rig := newTestRig(t, proto)
 	rig.Start()
@@ -315,7 +315,7 @@ func TestHyperStartpod(t *testing.T) {
 
 func TestRegisterVMAllocateTokens(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle(api.CmdRegisterVM, registerVM)
+	proto.HandleCommand(api.CmdRegisterVM, registerVM)
 
 	rig := newTestRig(t, proto)
 	rig.Start()
@@ -338,9 +338,9 @@ func TestRegisterVMAllocateTokens(t *testing.T) {
 
 func TestAttachVMAllocateTokens(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle(api.CmdRegisterVM, registerVM)
-	proto.Handle(api.CmdAttachVM, attachVM)
-	proto.Handle(api.CmdUnregisterVM, unregisterVM)
+	proto.HandleCommand(api.CmdRegisterVM, registerVM)
+	proto.HandleCommand(api.CmdAttachVM, attachVM)
+	proto.HandleCommand(api.CmdUnregisterVM, unregisterVM)
 
 	rig := newTestRig(t, proto)
 	rig.Start()
@@ -370,9 +370,9 @@ func TestAttachVMAllocateTokens(t *testing.T) {
 
 func TestConnectShim(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle(api.CmdRegisterVM, registerVM)
-	proto.Handle(api.CmdConnectShim, connectShim)
-	proto.Handle(api.CmdDisconnectShim, disconnectShim)
+	proto.HandleCommand(api.CmdRegisterVM, registerVM)
+	proto.HandleCommand(api.CmdConnectShim, connectShim)
+	proto.HandleCommand(api.CmdDisconnectShim, disconnectShim)
 
 	rig := newTestRig(t, proto)
 	rig.Start()
@@ -414,9 +414,9 @@ func TestConnectShim(t *testing.T) {
 // have coverage at a higher level.
 func TestHyperSequenceNumberRelocation(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle(api.CmdRegisterVM, registerVM)
-	proto.Handle(api.CmdConnectShim, connectShim)
-	proto.Handle(api.CmdHyper, hyper)
+	proto.HandleCommand(api.CmdRegisterVM, registerVM)
+	proto.HandleCommand(api.CmdConnectShim, connectShim)
+	proto.HandleCommand(api.CmdHyper, hyper)
 
 	rig := newTestRig(t, proto)
 	rig.Start()

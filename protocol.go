@@ -23,7 +23,7 @@ import (
 )
 
 // XXX: could do with its own package to remove that ugly namespacing
-type protocolHandler func([]byte, interface{}, *handlerResponse)
+type commandHandler func([]byte, interface{}, *handlerResponse)
 
 // Encapsulates the different parts of what a handler can return.
 type handlerResponse struct {
@@ -51,14 +51,14 @@ func (r *handlerResponse) AddResult(key string, value interface{}) {
 }
 
 type protocol struct {
-	cmdHandlers [api.CmdMax]protocolHandler
+	cmdHandlers [api.CmdMax]commandHandler
 }
 
 func newProtocol() *protocol {
 	return &protocol{}
 }
 
-func (proto *protocol) Handle(cmd api.Command, handler protocolHandler) {
+func (proto *protocol) HandleCommand(cmd api.Command, handler commandHandler) {
 	proto.cmdHandlers[cmd] = handler
 }
 

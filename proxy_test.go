@@ -17,15 +17,11 @@ package main
 import (
 	"encoding/json"
 	"flag"
-	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
-	"time"
 
 	"github.com/clearcontainers/proxy/api"
 	goapi "github.com/clearcontainers/proxy/client"
@@ -52,9 +48,6 @@ type testRig struct {
 	protocol  *protocol
 	proxyConn net.Conn // socket used by proxy to communicate with Client
 
-	// proxy, forked
-	proxySocketPath string
-	proxyCommand    *exec.Cmd
 
 	// client
 	Client *goapi.Client
@@ -70,10 +63,6 @@ func newTestRig(t *testing.T, proto *protocol) *testRig {
 		protocol: proto,
 		detector: NewFdLeadDetector(),
 	}
-}
-
-func (rig *testRig) SetFork(fork bool) {
-	rig.proxyFork = fork
 }
 
 func (rig *testRig) Start() {
@@ -103,66 +92,19 @@ func (rig *testRig) Start() {
 	// barrier between two reads(), so we spawn a process in that case.
 	var clientConn net.Conn
 
-	if rig.proxyFork {
-		rig.proxySocketPath = mock.GetTmpPath("test-proxy.%s.sock")
-		rig.proxyCommand = proxyCommand(rig.proxySocketPath)
-		err = rig.proxyCommand.Start()
-		assert.Nil(rig.t, err)
-		//output, err := rig.proxyCommand.CombinedOutput()
-		//fmt.Fprintln(os.Stderr, hex.Dump(output))
-		for i := 0; i < 2000; i++ {
-			// XXX: We might want a mode where the proxy forks as
-			// soon as it listens on its socket so we have a way to
-			// known when we can connect to the proxy socket.
-			time.Sleep(1 * time.Millisecond)
-			clientConn, err = net.Dial("unix", rig.proxySocketPath)
-			if err == nil {
-				break
-			}
-		}
-		assert.NotNil(rig.t, clientConn)
-		rig.wg.Add(1)
-		go func() {
-			rig.proxyCommand.Wait()
-			rig.wg.Done()
-		}()
-	} else {
-		// client <-> proxy connection
-		clientConn, rig.proxyConn, err = Socketpair()
-		assert.Nil(rig.t, err)
-		// Start proxy main go routine
-		rig.proxy = newProxy()
-		rig.wg.Add(1)
-		go func() {
-			rig.proxy.serveNewClient(rig.protocol, rig.proxyConn)
-			rig.wg.Done()
-		}()
-	}
+	// client <-> proxy connection
+	clientConn, rig.proxyConn, err = Socketpair()
+	assert.Nil(rig.t, err)
+	// Start proxy main go routine
+	rig.proxy = newProxy()
+	rig.wg.Add(1)
+	go func() {
+		rig.proxy.serveNewClient(rig.protocol, rig.proxyConn)
+		rig.wg.Done()
+	}()
 
 	// Client object that can be used to issue proxy commands
 	rig.Client = goapi.NewClient(clientConn.(*net.UnixConn))
-}
-
-// A fake test we use to lauch a full proxy process
-func proxyCommand(socketPath string) *exec.Cmd {
-	cs := []string{"-test.run=TestLaunchProxy"}
-	cmd := exec.Command(os.Args[0], cs...)
-
-	socketEnv := fmt.Sprintf("CC_TEST_SOCKET_PATH=%s", socketPath)
-	cmd.Env = []string{"CC_TEST_PROXY_PROCESS=1", socketEnv}
-
-	return cmd
-}
-
-func TestLaunchProxy(t *testing.T) {
-	if os.Getenv("CC_TEST_PROXY_PROCESS") != "1" {
-		return
-	}
-
-	// used in proxy.go for the non socket-activated case
-	DefaultSocketPath = os.Getenv("CC_TEST_SOCKET_PATH")
-
-	proxyMain()
 }
 
 func (rig *testRig) Stop() {
@@ -170,18 +112,8 @@ func (rig *testRig) Stop() {
 
 	rig.Client.Close()
 
-	if rig.proxyCommand != nil {
-		cmd := rig.proxyCommand
-		if cmd.Process != nil {
-			syscall.Kill(cmd.Process.Pid, syscall.SIGTERM)
-		}
-	}
 	if rig.proxyConn != nil {
 		rig.proxyConn.Close()
-	}
-	if rig.proxySocketPath != "" {
-		//os.Remove(rig.proxySocketPath)
-
 	}
 
 	rig.Hyperstart.Stop()

@@ -44,10 +44,9 @@ type testRig struct {
 	proxyFork bool
 
 	// proxy, in process
-	proxy     *proxy
-	protocol  *protocol
-	proxyConn net.Conn // socket used by proxy to communicate with Client
-
+	proxy      *proxy
+	protocol   *protocol
+	proxyConns []net.Conn // sockets used by proxy to communicate with Client
 
 	// client
 	Client *goapi.Client
@@ -61,6 +60,7 @@ func newTestRig(t *testing.T, proto *protocol) *testRig {
 	return &testRig{
 		t:        t,
 		protocol: proto,
+		proxy:    newProxy(),
 		detector: NewFdLeadDetector(),
 	}
 }
@@ -85,25 +85,8 @@ func (rig *testRig) Start() {
 		rig.wg.Done()
 	}()
 
-	// we can either "start" the proxy in process or spawn a proxy process.
-	// Spawning the process (through TestLaunchProxy).
-	// Passing a file descriptor through connected AF_UNIX sockets in the
-	// same thread has a slight behaviour difference which breaks the
-	// barrier between two reads(), so we spawn a process in that case.
-	var clientConn net.Conn
-
-	// client <-> proxy connection
-	clientConn, rig.proxyConn, err = Socketpair()
-	assert.Nil(rig.t, err)
-	// Start proxy main go routine
-	rig.proxy = newProxy()
-	rig.wg.Add(1)
-	go func() {
-		rig.proxy.serveNewClient(rig.protocol, rig.proxyConn)
-		rig.wg.Done()
-	}()
-
 	// Client object that can be used to issue proxy commands
+	clientConn := rig.ServeNewClient()
 	rig.Client = goapi.NewClient(clientConn.(*net.UnixConn))
 }
 
@@ -112,8 +95,8 @@ func (rig *testRig) Stop() {
 
 	rig.Client.Close()
 
-	if rig.proxyConn != nil {
-		rig.proxyConn.Close()
+	for _, conn := range rig.proxyConns {
+		conn.Close()
 	}
 
 	rig.Hyperstart.Stop()
@@ -131,6 +114,21 @@ func (rig *testRig) Stop() {
 
 	assert.True(rig.t,
 		rig.detector.Compare(os.Stdout, rig.startFds, rig.stopFds))
+}
+
+// ServeNewClient simulate a new client connecting to the proxy. It returns the
+// net.Conn that represents client-side connection to the proxy.
+func (rig *testRig) ServeNewClient() net.Conn {
+	clientConn, proxyConn, err := Socketpair()
+	assert.Nil(rig.t, err)
+	rig.proxyConns = append(rig.proxyConns, proxyConn)
+	rig.wg.Add(1)
+	go func() {
+		rig.proxy.serveNewClient(rig.protocol, proxyConn)
+		rig.wg.Done()
+	}()
+
+	return clientConn
 }
 
 const testContainerID = "0987654321"

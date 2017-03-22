@@ -50,8 +50,13 @@ func (r *handlerResponse) AddResult(key string, value interface{}) {
 	r.results[key] = value
 }
 
+// streamHandler is the prototype of function that can be registered to be
+// called when receiving a stream frame
+type streamHandler func(frame *api.Frame, userData interface{}) error
+
 type protocol struct {
-	cmdHandlers [api.CmdMax]commandHandler
+	cmdHandlers   [api.CmdMax]commandHandler
+	streamHandler streamHandler
 }
 
 func newProtocol() *protocol {
@@ -60,6 +65,12 @@ func newProtocol() *protocol {
 
 func (proto *protocol) HandleCommand(cmd api.Command, handler commandHandler) {
 	proto.cmdHandlers[cmd] = handler
+}
+
+// HandleStream registers a callback to call when the protocol receives a
+// stream frame. The callback is called from a goroutine internal to proto.
+func (proto *protocol) HandleStream(handler streamHandler) {
+	proto.streamHandler = handler
 }
 
 type clientCtx struct {
@@ -114,6 +125,13 @@ func (proto *protocol) handleCommand(ctx *clientCtx, cmd *api.Frame) *api.Frame 
 	return frame
 }
 
+func (proto *protocol) handlerStream(ctx *clientCtx, frame *api.Frame) error {
+	if proto.streamHandler == nil {
+		return errors.New("protocol: unexpected stream frame")
+	}
+	return proto.streamHandler(frame, ctx.userData)
+}
+
 func (proto *protocol) Serve(conn net.Conn, userData interface{}) error {
 	ctx := &clientCtx{
 		conn:     conn,
@@ -128,21 +146,24 @@ func (proto *protocol) Serve(conn net.Conn, userData interface{}) error {
 			// just kill the connection
 			return err
 		}
-		if frame.Header.Type != api.TypeCommand {
-			// EOF or the client isn't even sending proper JSON,
-			// just kill the connection
-			return fmt.Errorf("serve: expected a command got a %v", frame.Header.Type)
 
-		}
+		switch frame.Header.Type {
+		case api.TypeCommand:
+			// Execute the corresponding handler
+			resp := proto.handleCommand(ctx, frame)
 
-		// Execute the corresponding handler
-		resp := proto.handleCommand(ctx, frame)
-
-		// Send the response back to the client.
-		if err = api.WriteFrame(conn, resp); err != nil {
-			// Something made us unable to write the response back
-			// to the client (could be a disconnection, ...).
-			return err
+			// Send the response back to the client.
+			if err = api.WriteFrame(conn, resp); err != nil {
+				// Something made us unable to write the response back
+				// to the client (could be a disconnection, ...).
+				return err
+			}
+		case api.TypeStream:
+			if err = proto.handlerStream(ctx, frame); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("protocol: unexpected frame type (%v)", frame.Header.Type)
 		}
 	}
 }

@@ -64,6 +64,7 @@ func newTestRig(t *testing.T) *testRig {
 	proto.HandleCommand(api.CmdHyper, hyper)
 	proto.HandleCommand(api.CmdConnectShim, connectShim)
 	proto.HandleCommand(api.CmdDisconnectShim, disconnectShim)
+	proto.HandleStream(forwardStdin)
 
 	return &testRig{
 		t:        t,
@@ -419,6 +420,117 @@ func TestHyperSequenceNumberRelocation(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotEqual(t, 0, payload.Process.Stdio)
 	assert.NotEqual(t, 0, payload.Process.Stderr)
+
+	rig.Stop()
+}
+
+type shimRig struct {
+	t      *testing.T
+	token  string
+	conn   net.Conn
+	client *goapi.Client
+}
+
+func newShimRig(t *testing.T, conn net.Conn, token string) *shimRig {
+	return &shimRig{
+		t:      t,
+		token:  token,
+		conn:   conn,
+		client: goapi.NewClient(conn.(*net.UnixConn)),
+	}
+}
+
+func (rig *shimRig) connect() error {
+	return rig.client.ConnectShim(rig.token)
+}
+
+func (rig *shimRig) close() {
+	rig.client.DisconnectShim()
+	rig.conn.Close()
+}
+
+func (rig *shimRig) writeIOString(msg string) {
+	api.WriteStream(rig.conn, api.StreamStdin, []byte(msg))
+}
+
+func (rig *shimRig) readIOStream() *api.Frame {
+	frame, err := api.ReadFrame(rig.conn)
+	assert.Nil(rig.t, err)
+	assert.Equal(rig.t, api.TypeStream, frame.Header.Type)
+	return frame
+}
+
+// peekIOSession returns the ioSession corresponding to token
+func peekIOSession(proxy *proxy, tokenStr string) *ioSession {
+	token := Token(tokenStr)
+
+	proxy.Lock()
+	defer proxy.Unlock()
+
+	info := proxy.tokenToVM[token]
+	if info == nil {
+		return nil
+	}
+
+	return info.vm.findSessionByToken(token)
+}
+
+func TestShimIO(t *testing.T) {
+	rig := newTestRig(t)
+	rig.Start()
+
+	// Register new VM, asking for tokens. We use the assumption the same
+	// connection can be used for ConnectShim, which is true in the tests.
+	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
+	ret, err := rig.Client.RegisterVM(testContainerID, ctlSocketPath, ioSocketPath,
+		&goapi.RegisterVMOptions{NumIOStreams: 1})
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(ret.IO.Tokens))
+	token := ret.IO.Tokens[0]
+	session := peekIOSession(rig.proxy, token)
+
+	// Create a new connection for the shim and register it.
+	shimConn := rig.ServeNewClient()
+	shim := newShimRig(t, shimConn, token)
+	err = shim.connect()
+	assert.Nil(t, err)
+
+	// Send stdin data.
+	stdinData := "stdin\n"
+	shim.writeIOString(stdinData)
+
+	// Check stdin data arrives correctly to hyperstart.
+	buf := make([]byte, 32)
+	n, seq := rig.Hyperstart.ReadIo(buf)
+	assert.Equal(t, session.ioBase, seq)
+	assert.Equal(t, len(stdinData)+12, n)
+	assert.Equal(t, stdinData, string(buf[12:n]))
+	assert.Nil(t, err)
+
+	// make hyperstart send something on stdout/stderr and verify we
+	// receive it.
+	streams := []struct {
+		seq    uint64
+		stream api.Stream
+		data   string
+	}{
+		{session.ioBase, api.StreamStdout, "stdout\n"},
+		{session.ioBase + 1, api.StreamStderr, "stderr\n"},
+	}
+
+	for _, stream := range streams {
+		rig.Hyperstart.SendIoString(stream.seq, stream.data)
+		frame := shim.readIOStream()
+		n := len(stream.data)
+		assert.NotNil(t, frame)
+		assert.Equal(t, api.TypeStream, frame.Header.Type)
+		assert.Equal(t, stream.stream, api.Stream(frame.Header.Opcode))
+		assert.Equal(t, n, len(frame.Payload))
+		assert.Equal(t, stream.data, string(frame.Payload[:n]))
+	}
+
+	// Cleanup
+	shim.close()
 
 	rig.Stop()
 }

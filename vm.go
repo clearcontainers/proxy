@@ -67,6 +67,9 @@ type ioSession struct {
 	// token is what identifies the I/O session to the external world
 	token Token
 
+	// Back pointer to the VM this session is attached to.
+	vm *vm
+
 	nStreams int
 	ioBase   uint64
 
@@ -75,10 +78,6 @@ type ioSession struct {
 
 	// socket connected to the fd sent over to the client
 	client net.Conn
-
-	// Used to wait for per-ioSession goroutines. Currently there's only
-	// one such goroutine, the one reading stdin data from client socket.
-	wg sync.WaitGroup
 }
 
 func newVM(id, ctlSerial, ioSerial string) *vm {
@@ -146,6 +145,18 @@ func (vm *vm) findSessionByToken(token Token) *ioSession {
 	return vm.tokenToSession[token]
 }
 
+func hyperstartTtyMessageToFrame(msg *hyperapi.TtyMessage, session *ioSession) *api.Frame {
+	var stream api.Stream
+
+	if msg.Session == session.ioBase {
+		stream = api.StreamStdout
+	} else {
+		stream = api.StreamStderr
+	}
+
+	return api.NewFrame(api.TypeStream, int(stream), msg.Message)
+}
+
 // This function runs in a goroutine, reading data from the io channel and
 // dispatching it to the right client (the one with matching seq number)
 // There's only one instance of this goroutine per-VM
@@ -166,7 +177,8 @@ func (vm *vm) ioHyperToClients() {
 		vm.infof(1, "io", "<- writing to client #%d", session.clientID)
 		vm.dump(2, msg.Message)
 
-		err = hyperstart.SendIoMessageWithConn(session.client, msg)
+		frame := hyperstartTtyMessageToFrame(msg, session)
+		err = api.WriteFrame(session.client, frame)
 		if err != nil {
 			// When the shim is forcefully killed, it's possible we
 			// still have data to write. Ignore errors for that case.
@@ -351,35 +363,27 @@ func (vm *vm) SendMessage(hyper *api.Hyper) error {
 	return err
 }
 
-// This function runs in a goroutine, reading data from the client socket and
-// writing data to the hyperstart I/O chanel.
-// There's one instance of this goroutine per client having done an allocateIO.
-func (vm *vm) ioClientToHyper(session *ioSession) {
-	for {
-		msg, err := hyperstart.ReadIoMessageWithConn(session.client)
-		if err != nil {
-			// client process is gone
-			break
-		}
-
-		if msg.Session != session.ioBase {
-			fmt.Fprintf(os.Stderr, "stdin seq %d not matching ioBase %d\n", msg.Session, session.ioBase)
-			session.client.Close()
-			break
-		}
-
-		vm.infof(1, "io", "-> writing to hyper from #%d", session.clientID)
-		vm.dump(2, msg.Message)
-
-		err = vm.hyperHandler.SendIoMessage(msg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"error writing I/O data to hyperstart: %v\n", err)
-			break
-		}
+// ForwardStdin forwards an api.Frame with stdin data to hyperstart
+func (session *ioSession) ForwardStdin(frame *api.Frame) error {
+	if frame.Header.Type != api.TypeStream {
+		return fmt.Errorf("expected stream frame got %s", frame.Header.Type)
 	}
 
-	session.wg.Done()
+	streamType := api.Stream(frame.Header.Opcode)
+	if streamType != api.StreamStdin {
+		return fmt.Errorf("expected stdin stream frame got %s", streamType)
+	}
+
+	vm := session.vm
+	msg := &hyperapi.TtyMessage{
+		Session: session.ioBase,
+		Message: frame.Payload,
+	}
+
+	vm.infof(1, "io", "-> writing to hyper from #%d", session.clientID)
+	vm.dump(2, msg.Message)
+
+	return vm.hyperHandler.SendIoMessage(msg)
 }
 
 func (vm *vm) AllocateToken() (Token, error) {
@@ -398,6 +402,7 @@ func (vm *vm) AllocateToken() (Token, error) {
 	}
 
 	session := &ioSession{
+		vm:       vm,
 		token:    token,
 		nStreams: nStreams,
 		ioBase:   ioBase,
@@ -431,10 +436,6 @@ func (vm *vm) AssociateShim(token Token, clientID uint64, clientConn net.Conn) (
 	session.clientID = clientID
 	session.client = clientConn
 
-	// Starts stdin forwarding between client and hyper
-	// session.wg.Add(1)
-	// go vm.ioClientToHyper(session)
-
 	return session, nil
 }
 
@@ -450,7 +451,6 @@ func (vm *vm) freeTokenUnlocked(token Token) error {
 		delete(vm.ioSessions, session.ioBase+uint64(i))
 	}
 
-	// this will wait for the per-I/O session goroutine(s) to finish
 	session.Close()
 
 	return nil
@@ -469,7 +469,6 @@ func (session *ioSession) Close() {
 	if session.client != nil {
 		session.client.Close()
 	}
-	session.wg.Wait()
 }
 
 func (vm *vm) Close() {

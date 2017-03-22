@@ -30,6 +30,8 @@ import (
 
 	"github.com/clearcontainers/proxy/api"
 
+	"errors"
+
 	"github.com/golang/glog"
 )
 
@@ -387,6 +389,16 @@ func disconnectShim(data []byte, userData interface{}, response *handlerResponse
 	client.infof(1, "DisonnectShim()")
 }
 
+func forwardStdin(frame *api.Frame, userData interface{}) error {
+	client := userData.(*client)
+
+	if client.session == nil {
+		return errors.New("stdin: client not associated with any I/O session")
+	}
+
+	return client.session.ForwardStdin(frame)
+}
+
 func newProxy() *proxy {
 	return &proxy{
 		vms:       make(map[string]*vm),
@@ -500,6 +512,7 @@ func (proxy *proxy) serve() {
 	proto.HandleCommand(api.CmdHyper, hyper)
 	proto.HandleCommand(api.CmdConnectShim, connectShim)
 	proto.HandleCommand(api.CmdDisconnectShim, disconnectShim)
+	proto.HandleStream(forwardStdin)
 
 	glog.V(1).Info("proxy started")
 

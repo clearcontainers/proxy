@@ -72,6 +72,8 @@ type ioSession struct {
 
 	nStreams int
 	ioBase   uint64
+	// Have we received the EOF paquet from hyperstart for this session?
+	terminated bool
 
 	// id  of the client owning that ioSession (the shim process, usually).
 	clientID uint64
@@ -146,6 +148,12 @@ func (vm *vm) findSessionByToken(token Token) *ioSession {
 }
 
 func hyperstartTtyMessageToFrame(msg *hyperapi.TtyMessage, session *ioSession) *api.Frame {
+	// Exit status
+	if session.terminated && len(msg.Message) == 1 {
+		return api.NewFrame(api.TypeNotification, int(api.NotificationProcessExited), msg.Message)
+	}
+
+	// Regular stdout/err data
 	var stream api.Stream
 
 	if msg.Session == session.ioBase {
@@ -171,6 +179,15 @@ func (vm *vm) ioHyperToClients() {
 		if session == nil {
 			fmt.Fprintf(os.Stderr,
 				"couldn't find client with seq number %d\n", msg.Session)
+			continue
+		}
+
+		// When the process corresponding to a session exits:
+		//   1. hyperstart sends an EOF paquet, ie. data_length == 0
+		//      session.terminated tracks that condition
+		//   2. hyperstart sends the exit status paquet, ie. data_length == 1
+		if len(msg.Message) == 0 {
+			session.terminated = true
 			continue
 		}
 

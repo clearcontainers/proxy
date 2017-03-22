@@ -529,6 +529,18 @@ func TestShimIO(t *testing.T) {
 		assert.Equal(t, stream.data, string(frame.Payload[:n]))
 	}
 
+	// Make hypertart send an exit status an test we receive it.
+	rig.Hyperstart.CloseIo(session.ioBase)
+	rig.Hyperstart.SendExitStatus(session.ioBase, 42)
+
+	frame, err := api.ReadFrame(shim.conn)
+	assert.Nil(t, err)
+	assert.Equal(t, api.TypeNotification, frame.Header.Type)
+	assert.Equal(t, api.NotificationProcessExited, frame.Header.Opcode)
+	assert.Equal(t, 1, frame.Header.PayloadLength)
+	assert.Equal(t, 1, len(frame.Payload))
+	assert.Equal(t, byte(42), frame.Payload[0])
+
 	// Cleanup
 	shim.close()
 

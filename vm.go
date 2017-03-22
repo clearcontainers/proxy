@@ -419,13 +419,13 @@ func (vm *vm) AllocateToken() (Token, error) {
 // clientConn) to a vm (POD). After associating the shim, a hyper command can
 // be issued to start the process inside the VM and data can flow between shim
 // and containerized process through the shim.
-func (vm *vm) AssociateShim(token Token, clientID uint64, clientConn net.Conn) error {
+func (vm *vm) AssociateShim(token Token, clientID uint64, clientConn net.Conn) (*ioSession, error) {
 	vm.Lock()
 	defer vm.Unlock()
 
 	session := vm.tokenToSession[token]
 	if session == nil {
-		return fmt.Errorf("vm: unknown token %s", token)
+		return nil, fmt.Errorf("vm: unknown token %s", token)
 	}
 
 	session.clientID = clientID
@@ -435,7 +435,7 @@ func (vm *vm) AssociateShim(token Token, clientID uint64, clientConn net.Conn) e
 	// session.wg.Add(1)
 	// go vm.ioClientToHyper(session)
 
-	return nil
+	return session, nil
 }
 
 func (vm *vm) freeTokenUnlocked(token Token) error {

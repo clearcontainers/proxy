@@ -83,8 +83,12 @@ type client struct {
 	proxy *proxy
 	vm    *vm
 
-	kind  clientKind
-	token Token // token is populated after a ConnectShim
+	kind clientKind
+
+	// token and session are populated once a client has issued a successful
+	// Connectshim.
+	token   Token
+	session *ioSession
 
 	conn net.Conn
 }
@@ -342,7 +346,7 @@ func connectShim(data []byte, userData interface{}, response *handlerResponse) {
 		return
 	}
 
-	err = info.vm.AssociateShim(token, client.id, client.conn)
+	session, err := info.vm.AssociateShim(token, client.id, client.conn)
 	if err != nil {
 		response.SetError(err)
 		return
@@ -350,6 +354,7 @@ func connectShim(data []byte, userData interface{}, response *handlerResponse) {
 
 	client.kind = clientKindShim
 	client.token = token
+	client.session = session
 
 	client.infof(1, "ConnectShim(token=%s)", payload.Token)
 }
@@ -376,6 +381,7 @@ func disconnectShim(data []byte, userData interface{}, response *handlerResponse
 		return
 	}
 
+	client.session = nil
 	client.token = ""
 
 	client.infof(1, "DisonnectShim()")

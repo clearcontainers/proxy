@@ -56,7 +56,15 @@ type testRig struct {
 	startFds, stopFds *FdSnapshot
 }
 
-func newTestRig(t *testing.T, proto *protocol) *testRig {
+func newTestRig(t *testing.T) *testRig {
+	proto := newProtocol()
+	proto.HandleCommand(api.CmdRegisterVM, registerVM)
+	proto.HandleCommand(api.CmdAttachVM, attachVM)
+	proto.HandleCommand(api.CmdUnregisterVM, unregisterVM)
+	proto.HandleCommand(api.CmdHyper, hyper)
+	proto.HandleCommand(api.CmdConnectShim, connectShim)
+	proto.HandleCommand(api.CmdDisconnectShim, disconnectShim)
+
 	return &testRig{
 		t:        t,
 		protocol: proto,
@@ -134,10 +142,7 @@ func (rig *testRig) ServeNewClient() net.Conn {
 const testContainerID = "0987654321"
 
 func TestRegisterVM(t *testing.T) {
-	proto := newProtocol()
-	proto.HandleCommand(api.CmdRegisterVM, registerVM)
-
-	rig := newTestRig(t, proto)
+	rig := newTestRig(t)
 	rig.Start()
 
 	// Register new VM.
@@ -170,11 +175,7 @@ func TestRegisterVM(t *testing.T) {
 }
 
 func TestUnregisterVM(t *testing.T) {
-	proto := newProtocol()
-	proto.HandleCommand(api.CmdRegisterVM, registerVM)
-	proto.HandleCommand(api.CmdUnregisterVM, unregisterVM)
-
-	rig := newTestRig(t, proto)
+	rig := newTestRig(t)
 	rig.Start()
 
 	// Register new VM
@@ -210,12 +211,7 @@ func TestUnregisterVM(t *testing.T) {
 }
 
 func TestAttachVM(t *testing.T) {
-	proto := newProtocol()
-	proto.HandleCommand(api.CmdRegisterVM, registerVM)
-	proto.HandleCommand(api.CmdAttachVM, attachVM)
-	proto.HandleCommand(api.CmdUnregisterVM, unregisterVM)
-
-	rig := newTestRig(t, proto)
+	rig := newTestRig(t)
 	rig.Start()
 
 	// Register new VM
@@ -247,11 +243,7 @@ func TestAttachVM(t *testing.T) {
 }
 
 func TestHyperPing(t *testing.T) {
-	proto := newProtocol()
-	proto.HandleCommand(api.CmdRegisterVM, registerVM)
-	proto.HandleCommand(api.CmdHyper, hyper)
-
-	rig := newTestRig(t, proto)
+	rig := newTestRig(t)
 	rig.Start()
 
 	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
@@ -275,11 +267,7 @@ func TestHyperPing(t *testing.T) {
 }
 
 func TestHyperStartpod(t *testing.T) {
-	proto := newProtocol()
-	proto.HandleCommand(api.CmdRegisterVM, registerVM)
-	proto.HandleCommand(api.CmdHyper, hyper)
-
-	rig := newTestRig(t, proto)
+	rig := newTestRig(t)
 	rig.Start()
 
 	// Register new VM
@@ -312,10 +300,7 @@ func TestHyperStartpod(t *testing.T) {
 }
 
 func TestRegisterVMAllocateTokens(t *testing.T) {
-	proto := newProtocol()
-	proto.HandleCommand(api.CmdRegisterVM, registerVM)
-
-	rig := newTestRig(t, proto)
+	rig := newTestRig(t)
 	rig.Start()
 
 	// Register new VM, asking for tokens
@@ -335,12 +320,7 @@ func TestRegisterVMAllocateTokens(t *testing.T) {
 }
 
 func TestAttachVMAllocateTokens(t *testing.T) {
-	proto := newProtocol()
-	proto.HandleCommand(api.CmdRegisterVM, registerVM)
-	proto.HandleCommand(api.CmdAttachVM, attachVM)
-	proto.HandleCommand(api.CmdUnregisterVM, unregisterVM)
-
-	rig := newTestRig(t, proto)
+	rig := newTestRig(t)
 	rig.Start()
 
 	// Register new VM
@@ -367,12 +347,7 @@ func TestAttachVMAllocateTokens(t *testing.T) {
 }
 
 func TestConnectShim(t *testing.T) {
-	proto := newProtocol()
-	proto.HandleCommand(api.CmdRegisterVM, registerVM)
-	proto.HandleCommand(api.CmdConnectShim, connectShim)
-	proto.HandleCommand(api.CmdDisconnectShim, disconnectShim)
-
-	rig := newTestRig(t, proto)
+	rig := newTestRig(t)
 	rig.Start()
 
 	// Register new VM, asking for tokens. We use the assumption the same
@@ -411,12 +386,7 @@ func TestConnectShim(t *testing.T) {
 // Relocations are thoroughly tested in vm_test.go, this is just to ensure we
 // have coverage at a higher level.
 func TestHyperSequenceNumberRelocation(t *testing.T) {
-	proto := newProtocol()
-	proto.HandleCommand(api.CmdRegisterVM, registerVM)
-	proto.HandleCommand(api.CmdConnectShim, connectShim)
-	proto.HandleCommand(api.CmdHyper, hyper)
-
-	rig := newTestRig(t, proto)
+	rig := newTestRig(t)
 	rig.Start()
 
 	// Register new VM, asking for tokens. We use the assumption the same

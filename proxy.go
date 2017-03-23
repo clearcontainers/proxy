@@ -16,6 +16,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -27,10 +28,9 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"syscall"
 
 	"github.com/clearcontainers/proxy/api"
-
-	"errors"
 
 	"github.com/golang/glog"
 )
@@ -389,6 +389,54 @@ func disconnectShim(data []byte, userData interface{}, response *handlerResponse
 	client.infof(1, "DisonnectShim()")
 }
 
+// "signal"
+func signal(data []byte, userData interface{}, response *handlerResponse) {
+	client := userData.(*client)
+	payload := api.Signal{}
+
+	if client.kind != clientKindShim {
+		response.SetErrorMsg("client isn't a shim")
+		return
+	}
+	session := client.session
+
+	if err := json.Unmarshal(data, &payload); err != nil {
+		response.SetError(err)
+		return
+	}
+
+	// Validate payload
+	signal := syscall.Signal(payload.SignalNumber)
+	if signal < 0 || signal >= syscall.SIGUNUSED {
+		response.SetErrorf("invalid signal number %d", payload.SignalNumber)
+		return
+	}
+	if signal == syscall.SIGWINCH && (payload.Columns == 0 || payload.Rows == 0) {
+		response.SetErrorf("received SIGWINCH but terminal size is invalid (%d,%d)",
+			payload.Columns, payload.Rows)
+		return
+	}
+	if signal != syscall.SIGWINCH && (payload.Columns != 0 || payload.Rows != 0) {
+		response.SetErrorf("received a terminal size (%d,%d) for signal %s",
+			payload.Columns, payload.Rows, signal)
+		return
+	}
+
+	client.infof(1, "Signal(%s,%d,%d)", signal, payload.Columns, payload.Rows)
+
+	var err error
+	if signal == syscall.SIGWINCH {
+		err = session.SendTerminalSize(payload.Columns, payload.Rows)
+	} else {
+		err = session.SendSignal(signal)
+	}
+	if err != nil {
+		response.SetError(err)
+		return
+	}
+
+}
+
 func forwardStdin(frame *api.Frame, userData interface{}) error {
 	client := userData.(*client)
 
@@ -512,6 +560,7 @@ func (proxy *proxy) serve() {
 	proto.HandleCommand(api.CmdHyper, hyper)
 	proto.HandleCommand(api.CmdConnectShim, connectShim)
 	proto.HandleCommand(api.CmdDisconnectShim, disconnectShim)
+	proto.HandleCommand(api.CmdSignal, signal)
 	proto.HandleStream(forwardStdin)
 
 	glog.V(1).Info("proxy started")

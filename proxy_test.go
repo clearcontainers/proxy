@@ -27,6 +27,8 @@ import (
 	goapi "github.com/clearcontainers/proxy/client"
 	"github.com/containers/virtcontainers/hyperstart/mock"
 
+	"syscall"
+
 	hyperapi "github.com/hyperhq/runv/hyperstart/api/json"
 	"github.com/stretchr/testify/assert"
 )
@@ -64,6 +66,7 @@ func newTestRig(t *testing.T) *testRig {
 	proto.HandleCommand(api.CmdHyper, hyper)
 	proto.HandleCommand(api.CmdConnectShim, connectShim)
 	proto.HandleCommand(api.CmdDisconnectShim, disconnectShim)
+	proto.HandleCommand(api.CmdSignal, signal)
 	proto.HandleStream(forwardStdin)
 
 	return &testRig{
@@ -540,6 +543,53 @@ func TestShimIO(t *testing.T) {
 	assert.Equal(t, 1, frame.Header.PayloadLength)
 	assert.Equal(t, 1, len(frame.Payload))
 	assert.Equal(t, byte(42), frame.Payload[0])
+
+	// Cleanup
+	shim.close()
+
+	rig.Stop()
+}
+
+func TestShimSignal(t *testing.T) {
+	rig := newTestRig(t)
+	rig.Start()
+
+	// Register new VM, asking for tokens. We use the assumption the same
+	// connection can be used for ConnectShim, which is true in the tests.
+	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
+	ret, err := rig.Client.RegisterVM(testContainerID, ctlSocketPath, ioSocketPath,
+		&goapi.RegisterVMOptions{NumIOStreams: 1})
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(ret.IO.Tokens))
+	token := ret.IO.Tokens[0]
+	session := peekIOSession(rig.proxy, token)
+
+	// Create a new connection for the shim and register it.
+	shimConn := rig.ServeNewClient()
+	shim := newShimRig(t, shimConn, token)
+	err = shim.connect()
+	assert.Nil(t, err)
+
+	// Send signal and check hyperstart receives the right thing.
+	shim.client.Kill(syscall.SIGUSR1)
+	msgs := rig.Hyperstart.GetLastMessages()
+	assert.Equal(t, 1, len(msgs))
+	decoded := hyperapi.KillCommand{}
+	err = json.Unmarshal(msgs[0].Message, &decoded)
+	assert.Nil(t, err)
+	assert.Equal(t, syscall.SIGUSR1, decoded.Signal)
+	assert.Equal(t, testContainerID, decoded.Container)
+
+	// Send new window size and check hyperstart receives the right thing.
+	shim.client.SendTerminalSize(42, 24)
+	msgs = rig.Hyperstart.GetLastMessages()
+	assert.Equal(t, 1, len(msgs))
+	decoded1 := windowSizeMessage07{}
+	err = json.Unmarshal(msgs[0].Message, &decoded1)
+	assert.Nil(t, err)
+	assert.Equal(t, session.ioBase, decoded1.Seq)
+	assert.Equal(t, uint16(42), decoded1.Column)
+	assert.Equal(t, uint16(24), decoded1.Row)
 
 	// Cleanup
 	shim.close()

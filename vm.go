@@ -22,6 +22,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"syscall"
 
 	"github.com/clearcontainers/proxy/api"
 
@@ -401,6 +402,49 @@ func (session *ioSession) ForwardStdin(frame *api.Frame) error {
 	vm.dump(2, msg.Message)
 
 	return vm.hyperHandler.SendIoMessage(msg)
+}
+
+// windowSizeMessage07 is the hyperstart 0.7 winsize message payload for the
+// winsize command. This payload has changed in 0.8 so we can't use the
+// definition in the hyperapi package.
+type windowSizeMessage07 struct {
+	Seq    uint64 `json:"seq"`
+	Row    uint16 `json:"row"`
+	Column uint16 `json:"column"`
+}
+
+// SendTerminalSize sends a new terminal geometry to the process represented by
+// session.
+func (session *ioSession) SendTerminalSize(columns, rows int) error {
+	msg := &windowSizeMessage07{
+		Seq:    session.ioBase,
+		Column: uint16(columns),
+		Row:    uint16(rows),
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	_, err = session.vm.hyperHandler.SendCtlMessage("winsize", data)
+	return err
+}
+
+// SendSignal
+func (session *ioSession) SendSignal(signal syscall.Signal) error {
+	msg := &hyperapi.KillCommand{
+		Container: session.vm.containerID,
+		Signal:    signal,
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	_, err = session.vm.hyperHandler.SendCtlMessage("killcontainer", data)
+	return err
 }
 
 func (vm *vm) AllocateToken() (Token, error) {

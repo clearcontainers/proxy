@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"syscall"
 
 	"github.com/clearcontainers/proxy/api"
 )
@@ -272,4 +273,31 @@ func (client *Client) ConnectShim(token string) error {
 // api.DisconnectShim payload.
 func (client *Client) DisconnectShim() error {
 	return client.sendCommandNoResponse(api.CmdDisconnectShim, nil)
+}
+
+func (client *Client) signal(signal syscall.Signal, columns, rows int) error {
+	payload := api.Signal{
+		SignalNumber: int(signal),
+		Columns:      columns,
+		Rows:         rows,
+	}
+
+	resp, err := client.sendCommand(api.CmdSignal, &payload)
+	if err != nil {
+		return err
+	}
+
+	return errorFromResponse(resp)
+}
+
+// Kill wraps the api.CmdSignal command and can be used by a shim to send a
+// signal to the associated process.
+func (client *Client) Kill(signal syscall.Signal) error {
+	return client.signal(signal, 0, 0)
+}
+
+// SendTerminalSize wraps the api.CmdSignal command and can be used by a shim
+// to send a new signal to the associated process.
+func (client *Client) SendTerminalSize(columns, rows int) error {
+	return client.signal(syscall.SIGWINCH, columns, rows)
 }

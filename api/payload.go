@@ -152,6 +152,18 @@ type ConnectShim struct {
 type DisconnectShim struct {
 }
 
+// Signal is used to send signals to the container process inside the VM. This
+// payload is only valid after a successful ConnectShim.
+type Signal struct {
+	SignalNumber int `json:"signalNumber"`
+	// Columns is only valid for SIGWINCH and is the new number of columns of
+	// the terminal.
+	Columns int `json:"columns,omitempty"`
+	// Rows is only valid for SIGWINCH and is the new number of rows of the
+	// terminal.
+	Rows int `json:"rows,omitempty"`
+}
+
 // ErrorResponse is the payload send in Responses where the Error flag is set.
 type ErrorResponse struct {
 	Message string `json:"msg"`

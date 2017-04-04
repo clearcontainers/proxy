@@ -26,7 +26,7 @@ import (
 
 	"github.com/clearcontainers/proxy/api"
 
-	"github.com/containers/virtcontainers/hyperstart"
+	"github.com/containers/virtcontainers/pkg/hyperstart"
 	"github.com/golang/glog"
 	hyperapi "github.com/hyperhq/runv/hyperstart/api/json"
 )

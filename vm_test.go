@@ -20,7 +20,7 @@ import (
 	"testing"
 
 	"github.com/clearcontainers/proxy/api"
-	"github.com/containers/virtcontainers/hyperstart/mock"
+	"github.com/containers/virtcontainers/pkg/hyperstart/mock"
 	hyperapi "github.com/hyperhq/runv/hyperstart/api/json"
 
 	"github.com/stretchr/testify/assert"

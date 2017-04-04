@@ -27,13 +27,13 @@ import (
 // The Client struct can be used to issue proxy API calls with a convenient
 // high level API.
 type Client struct {
-	conn *net.UnixConn
+	conn net.Conn
 }
 
 // NewClient creates a new client object to communicate with the proxy using
 // the connection conn. The user should call Close() once finished with the
 // client object to close conn.
-func NewClient(conn *net.UnixConn) *Client {
+func NewClient(conn net.Conn) *Client {
 	return &Client{
 		conn: conn,
 	}

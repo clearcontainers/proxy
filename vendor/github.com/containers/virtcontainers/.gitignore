@@ -1,0 +1,4 @@
+*.patch
+*.o
+/hack/virtc/virtc
+/pause/pause

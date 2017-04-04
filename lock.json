@@ -1,11 +1,28 @@
 {
-    "memo": "",
+    "memo": "4943dc5956e8a4ba725d3e23065449ef8e8ceadf9e07c4842c24a1f40c4f6465",
     "projects": [
         {
-            "name": "github.com/containers/virtcontainers",
-            "revision": "8edf47260fafc8ca7f58fd2ff3f773730f2b4df8",
+            "name": "github.com/Sirupsen/logrus",
+            "version": "v0.8.7",
+            "revision": "418b41d23a1bf978c06faea5313ba194650ac088",
             "packages": [
-                "pkg/hyperstart"
+                "."
+            ]
+        },
+        {
+            "name": "github.com/containers/virtcontainers",
+            "revision": "ca594f2a9082a0a0b826d715b2ed7b75120968f3",
+            "packages": [
+                "pkg/hyperstart",
+                "pkg/hyperstart/mock"
+            ]
+        },
+        {
+            "name": "github.com/davecgh/go-spew",
+            "version": "v1.1.0",
+            "revision": "346938d642f2ec3594ed81d874461961cd0faa76",
+            "packages": [
+                "spew"
             ]
         },
         {
@@ -22,6 +39,22 @@
             "revision": "a88ec00ebbcda1293a84403a848637969a812830",
             "packages": [
                 "hyperstart/api/json"
+            ]
+        },
+        {
+            "name": "github.com/pmezard/go-difflib",
+            "version": "v1.0.0",
+            "revision": "c0b812dadcf4498dede02bb7f0c5c478be997e34",
+            "packages": [
+                "difflib"
+            ]
+        },
+        {
+            "name": "github.com/stretchr/testify",
+            "version": "v1.1.4",
+            "revision": "69483b4bd14f5845b5a1e55bca19e954e827f1d0",
+            "packages": [
+                "assert"
             ]
         }
     ]

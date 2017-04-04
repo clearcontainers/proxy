@@ -50,6 +50,28 @@ type Response struct {
 	Data    map[string]interface{} `json:"data,omitempty"`
 }
 
+// Offsets (in bytes) of frame headers fields.
+const (
+	versionOffset       = 0
+	headerLengthOffset  = 2
+	typeOffset          = 6
+	flagsOffset         = 6
+	opcodeOffset        = 7
+	payloadLengthOffset = 8
+)
+
+// Size (in bytes) of frame header fields (when larger than 1 byte).
+const (
+	versionSize       = 2
+	payloadLengthSize = 4
+)
+
+// Masks needed to extract fields
+const (
+	typeMask  = 0x0f
+	flagsMask = 0xf0
+)
+
 func maxOpcodeForFrameType(t FrameType) int {
 	switch t {
 	default:
@@ -80,25 +102,25 @@ func ReadFrame(r io.Reader) (*Frame, error) {
 	// Decode it.
 	frame := &Frame{}
 	header := &frame.Header
-	header.Version = int(binary.BigEndian.Uint16(buf[0:2]))
+	header.Version = int(binary.BigEndian.Uint16(buf[versionOffset : versionOffset+versionSize]))
 	if header.Version < 2 || header.Version > Version {
 		return nil, fmt.Errorf("frame: bad version %d", header.Version)
 	}
-	header.HeaderLength = int(buf[2]) * 4
-	header.Type = FrameType(buf[6] & 0xf)
-	flags := buf[6] & 0xf0
+	header.HeaderLength = int(buf[headerLengthOffset]) * 4
+	header.Type = FrameType(buf[typeOffset] & typeMask)
+	flags := buf[flagsOffset] & flagsMask
 	if flags&flagInError != 0 {
 		header.InError = true
 	}
 	if header.Type >= TypeMax {
 		return nil, fmt.Errorf("frame: bad type %s", header.Type)
 	}
-	header.Opcode = int(buf[7])
+	header.Opcode = int(buf[opcodeOffset])
 	if header.Opcode >= maxOpcodeForFrameType(header.Type) {
 		return nil, fmt.Errorf("frame: bad opcode (%d) for type %s", header.Opcode,
 			header.Type)
 	}
-	header.PayloadLength = int(binary.BigEndian.Uint32(buf[8:12]))
+	header.PayloadLength = int(binary.BigEndian.Uint32(buf[payloadLengthOffset : payloadLengthOffset+payloadLengthSize]))
 
 	// Read the payload.
 	received := 0
@@ -140,15 +162,16 @@ func WriteFrame(w io.Writer, frame *Frame) error {
 	// Prepare the header.
 	len := minHeaderLength + header.PayloadLength
 	buf := make([]byte, len)
-	binary.BigEndian.PutUint16(buf[0:2], uint16(header.Version))
-	buf[2] = byte(header.HeaderLength / 4)
+	binary.BigEndian.PutUint16(buf[versionOffset:versionOffset+versionSize], uint16(header.Version))
+	buf[headerLengthOffset] = byte(header.HeaderLength / 4)
 	flags := byte(0)
 	if frame.Header.InError {
 		flags |= flagInError
 	}
-	buf[6] = flags | byte(header.Type)&0xf
-	buf[7] = byte(header.Opcode)
-	binary.BigEndian.PutUint32(buf[8:8+4], uint32(header.PayloadLength))
+	buf[typeOffset] = flags | byte(header.Type)&typeMask
+	buf[opcodeOffset] = byte(header.Opcode)
+	binary.BigEndian.PutUint32(buf[payloadLengthOffset:payloadLengthOffset+payloadLengthSize],
+		uint32(header.PayloadLength))
 
 	// Write payload if needed
 	if header.PayloadLength > 0 {

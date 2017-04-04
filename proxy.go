@@ -16,21 +16,38 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"syscall"
 
 	"github.com/clearcontainers/proxy/api"
 
 	"github.com/golang/glog"
 )
+
+// tokenState  tracks if an I/O token has been claimed by a shim.
+type tokenState int
+
+const (
+	tokenStateAllocated tokenState = iota
+	tokenStateClaimed
+)
+
+// tokenInfo keeps track of per-token data
+type tokenInfo struct {
+	state tokenState
+	vm    *vm
+}
 
 // Main struct holding the proxy state
 type proxy struct {
@@ -39,10 +56,14 @@ type proxy struct {
 	sync.Mutex
 
 	// proxy socket
-	listener net.Listener
+	listener   net.Listener
+	socketPath string
 
 	// vms are hashed by their containerID
 	vms map[string]*vm
+
+	// tokenToVM maps I/O token to their per-token info
+	tokenToVM map[Token]*tokenInfo
 
 	// Output the VM console on stderr
 	enableVMConsole bool
@@ -50,12 +71,26 @@ type proxy struct {
 	wg sync.WaitGroup
 }
 
+type clientKind int
+
+const (
+	clientKindRuntime clientKind = 1 << iota
+	clientKindShim
+)
+
 // Represents a client, either a cc-oci-runtime or cc-shim process having
 // opened a socket to the proxy
 type client struct {
 	id    uint64
 	proxy *proxy
 	vm    *vm
+
+	kind clientKind
+
+	// token and session are populated once a client has issued a successful
+	// Connectshim.
+	token   Token
+	session *ioSession
 
 	conn net.Conn
 }
@@ -77,52 +112,123 @@ func (c *client) infof(lvl glog.Level, fmt string, a ...interface{}) {
 	glog.Infof("[client #%d] "+fmt, a...)
 }
 
-// "hello"
-func helloHandler(data []byte, userData interface{}, response *handlerResponse) {
-	client := userData.(*client)
-	hello := api.Hello{}
+func (proxy *proxy) allocateTokens(vm *vm, numIOStreams int) (*api.IOResponse, error) {
+	if numIOStreams <= 0 {
+		return nil, nil
+	}
 
-	if err := json.Unmarshal(data, &hello); err != nil {
+	tokens := make([]string, 0, numIOStreams)
+
+	for i := 0; i < numIOStreams; i++ {
+		token, err := vm.AllocateToken()
+		if err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, string(token))
+		proxy.Lock()
+		proxy.tokenToVM[token] = &tokenInfo{
+			state: tokenStateAllocated,
+			vm:    vm,
+		}
+		proxy.Unlock()
+	}
+
+	url := url.URL{
+		Scheme: "unix",
+		Path:   proxy.socketPath,
+	}
+
+	return &api.IOResponse{
+		URL:    url.String(),
+		Tokens: tokens,
+	}, nil
+}
+
+func (proxy *proxy) claimToken(token Token) (*tokenInfo, error) {
+	proxy.Lock()
+	defer proxy.Unlock()
+
+	info := proxy.tokenToVM[token]
+	if info == nil {
+		return nil, fmt.Errorf("unknown token: %s", token)
+	}
+
+	if info.state == tokenStateClaimed {
+		return nil, fmt.Errorf("token already claimed: %s", token)
+	}
+
+	info.state = tokenStateClaimed
+
+	return info, nil
+}
+
+func (proxy *proxy) releaseToken(token Token) (*tokenInfo, error) {
+	proxy.Lock()
+	defer proxy.Unlock()
+
+	info := proxy.tokenToVM[token]
+	if info == nil {
+		return nil, fmt.Errorf("unknown token: %s", token)
+	}
+
+	return info, nil
+}
+
+// "RegisterVM"
+func registerVM(data []byte, userData interface{}, response *handlerResponse) {
+	client := userData.(*client)
+	payload := api.RegisterVM{}
+
+	if err := json.Unmarshal(data, &payload); err != nil {
 		response.SetError(err)
 		return
 	}
 
-	if hello.ContainerID == "" || hello.CtlSerial == "" || hello.IoSerial == "" {
-		response.SetErrorMsg("malformed hello command")
+	if payload.ContainerID == "" || payload.CtlSerial == "" || payload.IoSerial == "" {
+		response.SetErrorMsg("malformed RegisterVM command")
 	}
 
 	proxy := client.proxy
 	proxy.Lock()
-	if _, ok := proxy.vms[hello.ContainerID]; ok {
+	if _, ok := proxy.vms[payload.ContainerID]; ok {
 
 		proxy.Unlock()
 		response.SetErrorf("%s: container already registered",
-			hello.ContainerID)
+			payload.ContainerID)
 		return
 	}
 
-	client.infof(1, "hello(containerId=%s,ctlSerial=%s,ioSerial=%s,console=%s)", hello.ContainerID,
-		hello.CtlSerial, hello.IoSerial, hello.Console)
+	client.infof(1,
+		"RegisterVM(containerId=%s,ctlSerial=%s,ioSerial=%s,console=%s)",
+		payload.ContainerID, payload.CtlSerial, payload.IoSerial,
+		payload.Console)
 
-	vm := newVM(hello.ContainerID, hello.CtlSerial, hello.IoSerial)
-	proxy.vms[hello.ContainerID] = vm
+	vm := newVM(payload.ContainerID, payload.CtlSerial, payload.IoSerial)
+	proxy.vms[payload.ContainerID] = vm
 	proxy.Unlock()
 
-	if hello.Console != "" && proxy.enableVMConsole {
-		vm.setConsole(hello.Console)
+	if payload.Console != "" && proxy.enableVMConsole {
+		vm.setConsole(payload.Console)
+	}
+
+	io, err := proxy.allocateTokens(vm, payload.NumIOStreams)
+	if err != nil {
+		response.SetError(err)
+		return
+	}
+	if io != nil {
+		response.AddResult("io", io)
 	}
 
 	if err := vm.Connect(); err != nil {
 		proxy.Lock()
-		delete(proxy.vms, hello.ContainerID)
+		delete(proxy.vms, payload.ContainerID)
 		proxy.Unlock()
 		response.SetError(err)
 		return
 	}
 
 	client.vm = vm
-
-	response.AddResult("version", api.Version)
 
 	// We start one goroutine per-VM to monitor the qemu process
 	proxy.wg.Add(1)
@@ -134,59 +240,66 @@ func helloHandler(data []byte, userData interface{}, response *handlerResponse) 
 }
 
 // "attach"
-func attachHandler(data []byte, userData interface{}, response *handlerResponse) {
+func attachVM(data []byte, userData interface{}, response *handlerResponse) {
 	client := userData.(*client)
 	proxy := client.proxy
 
-	attach := api.Attach{}
-	if err := json.Unmarshal(data, &attach); err != nil {
+	payload := api.AttachVM{}
+	if err := json.Unmarshal(data, &payload); err != nil {
 		response.SetError(err)
 		return
 	}
 
 	proxy.Lock()
-	vm := proxy.vms[attach.ContainerID]
+	vm := proxy.vms[payload.ContainerID]
 	proxy.Unlock()
 
 	if vm == nil {
-		response.SetErrorf("unknown containerID: %s", attach.ContainerID)
+		response.SetErrorf("unknown containerID: %s", payload.ContainerID)
 		return
 	}
 
-	client.infof(1, "attach(containerId=%s)", attach.ContainerID)
+	io, err := proxy.allocateTokens(vm, payload.NumIOStreams)
+	if err != nil {
+		response.SetError(err)
+		return
+	}
+	if io != nil {
+		response.AddResult("io", io)
+	}
+
+	client.infof(1, "AttachVM(containerId=%s)", payload.ContainerID)
 
 	client.vm = vm
-
-	response.AddResult("version", api.Version)
 }
 
-// "bye"
-func byeHandler(data []byte, userData interface{}, response *handlerResponse) {
-	// Bye only affects the proxy.vms map and so removes the VM from the
-	// client visible API.
+// "UnregisterVM"
+func unregisterVM(data []byte, userData interface{}, response *handlerResponse) {
+	// UnregisterVM only affects the proxy.vms map and so removes the VM
+	// from the client visible API.
 	// vm.Close(), which tears down the VM object, is done at the end of
 	// the VM life cycle, when  we detect the qemu process is effectively
-	// gone (see helloHandler)
+	// gone (see RegisterVM)
 
 	client := userData.(*client)
 	proxy := client.proxy
 
-	bye := api.Bye{}
-	if err := json.Unmarshal(data, &bye); err != nil {
+	payload := api.UnregisterVM{}
+	if err := json.Unmarshal(data, &payload); err != nil {
 		response.SetError(err)
 		return
 	}
 
 	proxy.Lock()
-	vm := proxy.vms[bye.ContainerID]
+	vm := proxy.vms[payload.ContainerID]
 	proxy.Unlock()
 
 	if vm == nil {
-		response.SetErrorf("unknown containerID: %s", bye.ContainerID)
+		response.SetErrorf("unknown containerID: %s", payload.ContainerID)
 		return
 	}
 
-	client.info(1, "bye()")
+	client.info(1, "UnregisterVM()")
 
 	proxy.Lock()
 	delete(proxy.vms, vm.containerID)
@@ -195,56 +308,8 @@ func byeHandler(data []byte, userData interface{}, response *handlerResponse) {
 	client.vm = nil
 }
 
-// "allocateIO"
-func allocateIoHandler(data []byte, userData interface{}, response *handlerResponse) {
-	client := userData.(*client)
-	vm := client.vm
-
-	allocateIo := api.AllocateIo{}
-	if err := json.Unmarshal(data, &allocateIo); err != nil {
-		response.SetError(err)
-		return
-	}
-
-	if allocateIo.NStreams < 1 || allocateIo.NStreams > 2 {
-		response.SetErrorf("asking for unexpected number of streams (%d)",
-			allocateIo.NStreams)
-	}
-
-	if vm == nil {
-		response.SetErrorMsg("client not attached to a vm")
-		return
-	}
-
-	client.infof(1, "allocateIo(nStreams=%d)", allocateIo.NStreams)
-
-	// We'll send c0 to the client, keep c1
-	c0, c1, err := Socketpair()
-	if err != nil {
-		response.SetError(err)
-		return
-	}
-
-	f0, err := c0.File()
-	if err != nil {
-		response.SetError(err)
-		return
-	}
-
-	ioBase := vm.AllocateIo(allocateIo.NStreams, client.id, c1)
-
-	client.infof(1, "-> %d streams allocated, ioBase=%d", allocateIo.NStreams, ioBase)
-
-	response.AddResult("ioBase", ioBase)
-	response.SetFile(f0)
-
-	// File() dups the underlying fd, so it's safe to close c0 here (will
-	// keep the c0 <-> c1 connection alive).
-	c0.Close()
-}
-
 // "hyper"
-func hyperHandler(data []byte, userData interface{}, response *handlerResponse) {
+func hyper(data []byte, userData interface{}, response *handlerResponse) {
 	client := userData.(*client)
 	hyper := api.Hyper{}
 	vm := client.vm
@@ -261,13 +326,131 @@ func hyperHandler(data []byte, userData interface{}, response *handlerResponse) 
 
 	client.infof(1, "hyper(cmd=%s, data=%s)", hyper.HyperName, hyper.Data)
 
-	err := vm.SendMessage(hyper.HyperName, hyper.Data)
+	err := vm.SendMessage(&hyper)
 	response.SetError(err)
+}
+
+// "connectShim"
+func connectShim(data []byte, userData interface{}, response *handlerResponse) {
+	client := userData.(*client)
+	proxy := client.proxy
+
+	payload := api.ConnectShim{}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		response.SetError(err)
+		return
+	}
+
+	token := Token(payload.Token)
+	info, err := proxy.claimToken(token)
+	if err != nil {
+		response.SetError(err)
+		return
+	}
+
+	session, err := info.vm.AssociateShim(token, client.id, client.conn)
+	if err != nil {
+		response.SetError(err)
+		return
+	}
+
+	client.kind = clientKindShim
+	client.token = token
+	client.session = session
+
+	client.infof(1, "ConnectShim(token=%s)", payload.Token)
+}
+
+// "disconnectShim"
+func disconnectShim(data []byte, userData interface{}, response *handlerResponse) {
+	client := userData.(*client)
+	proxy := client.proxy
+
+	if client.kind != clientKindShim {
+		response.SetErrorMsg("client isn't a shim")
+		return
+	}
+
+	info, err := proxy.releaseToken(client.token)
+	if err != nil {
+		response.SetError(err)
+		return
+	}
+
+	err = info.vm.FreeToken(client.token)
+	if err != nil {
+		response.SetError(err)
+		return
+	}
+
+	client.session = nil
+	client.token = ""
+
+	client.infof(1, "DisonnectShim()")
+}
+
+// "signal"
+func signal(data []byte, userData interface{}, response *handlerResponse) {
+	client := userData.(*client)
+	payload := api.Signal{}
+
+	if client.kind != clientKindShim {
+		response.SetErrorMsg("client isn't a shim")
+		return
+	}
+	session := client.session
+
+	if err := json.Unmarshal(data, &payload); err != nil {
+		response.SetError(err)
+		return
+	}
+
+	// Validate payload
+	signal := syscall.Signal(payload.SignalNumber)
+	if signal < 0 || signal >= syscall.SIGUNUSED {
+		response.SetErrorf("invalid signal number %d", payload.SignalNumber)
+		return
+	}
+	if signal == syscall.SIGWINCH && (payload.Columns == 0 || payload.Rows == 0) {
+		response.SetErrorf("received SIGWINCH but terminal size is invalid (%d,%d)",
+			payload.Columns, payload.Rows)
+		return
+	}
+	if signal != syscall.SIGWINCH && (payload.Columns != 0 || payload.Rows != 0) {
+		response.SetErrorf("received a terminal size (%d,%d) for signal %s",
+			payload.Columns, payload.Rows, signal)
+		return
+	}
+
+	client.infof(1, "Signal(%s,%d,%d)", signal, payload.Columns, payload.Rows)
+
+	var err error
+	if signal == syscall.SIGWINCH {
+		err = session.SendTerminalSize(payload.Columns, payload.Rows)
+	} else {
+		err = session.SendSignal(signal)
+	}
+	if err != nil {
+		response.SetError(err)
+		return
+	}
+
+}
+
+func forwardStdin(frame *api.Frame, userData interface{}) error {
+	client := userData.(*client)
+
+	if client.session == nil {
+		return errors.New("stdin: client not associated with any I/O session")
+	}
+
+	return client.session.ForwardStdin(frame)
 }
 
 func newProxy() *proxy {
 	return &proxy{
-		vms: make(map[string]*vm),
+		vms:       make(map[string]*vm),
+		tokenToVM: make(map[Token]*tokenInfo),
 	}
 }
 
@@ -278,6 +461,26 @@ var DefaultSocketPath string
 // ArgSocketPath is populated at runtime from the option -socket-path
 var ArgSocketPath = flag.String("socket-path", "", "specify path to socket file")
 
+// getSocketPath computes the path of the proxy socket. Note that when socket
+// activated, the socket path is specified in the systemd socket file but the
+// same value is set in DefaultSocketPath at link time.
+func getSocketPath() string {
+	// Invoking "go build" without any linker option will not
+	// populate DefaultSocketPath, so fallback to a reasonable
+	// path. People should really use the Makefile though.
+	if DefaultSocketPath == "" {
+		DefaultSocketPath = "/var/run/cc-oci-runtime/proxy.sock"
+	}
+
+	socketPath := DefaultSocketPath
+
+	if len(*ArgSocketPath) != 0 {
+		socketPath = *ArgSocketPath
+	}
+
+	return socketPath
+}
+
 func (proxy *proxy) init() error {
 	var l net.Listener
 	var err error
@@ -287,6 +490,7 @@ func (proxy *proxy) init() error {
 	proxy.enableVMConsole = v >= 3
 
 	// Open the proxy socket
+	proxy.socketPath = getSocketPath()
 	fds := listenFds()
 
 	if len(fds) > 1 {
@@ -297,35 +501,24 @@ func (proxy *proxy) init() error {
 		if err != nil {
 			return fmt.Errorf("couldn't listen on socket: %v", err)
 		}
+
 	} else {
-		// Invoking "go build" without any linker option will not
-		// populate DefaultSocketPath, so fallback to a reasonable
-		// path.
-		if DefaultSocketPath == "" {
-			DefaultSocketPath = "/var/run/cc-oci-runtime/proxy.sock"
-		}
-
-		socketPath := DefaultSocketPath
-		if len(*ArgSocketPath) != 0 {
-			socketPath = *ArgSocketPath
-		}
-
-		socketDir := filepath.Dir(socketPath)
+		socketDir := filepath.Dir(proxy.socketPath)
 		if err = os.MkdirAll(socketDir, 0750); err != nil {
 			return fmt.Errorf("couldn't create socket directory: %v", err)
 		}
-		if err = os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		if err = os.Remove(proxy.socketPath); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("couldn't remove exiting socket: %v", err)
 		}
-		l, err = net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
+		l, err = net.ListenUnix("unix", &net.UnixAddr{Name: proxy.socketPath, Net: "unix"})
 		if err != nil {
 			return fmt.Errorf("couldn't create AF_UNIX socket: %v", err)
 		}
-		if err = os.Chmod(socketPath, 0660|os.ModeSocket); err != nil {
+		if err = os.Chmod(proxy.socketPath, 0660|os.ModeSocket); err != nil {
 			return fmt.Errorf("couldn't set mode on socket: %v", err)
 		}
 
-		glog.V(1).Info("listening on ", socketPath)
+		glog.V(1).Info("listening on ", proxy.socketPath)
 	}
 
 	proxy.listener = l
@@ -361,11 +554,14 @@ func (proxy *proxy) serve() {
 
 	// Define the client (runtime/shim) <-> proxy protocol
 	proto := newProtocol()
-	proto.Handle("hello", helloHandler)
-	proto.Handle("attach", attachHandler)
-	proto.Handle("bye", byeHandler)
-	proto.Handle("allocateIO", allocateIoHandler)
-	proto.Handle("hyper", hyperHandler)
+	proto.HandleCommand(api.CmdRegisterVM, registerVM)
+	proto.HandleCommand(api.CmdAttachVM, attachVM)
+	proto.HandleCommand(api.CmdUnregisterVM, unregisterVM)
+	proto.HandleCommand(api.CmdHyper, hyper)
+	proto.HandleCommand(api.CmdConnectShim, connectShim)
+	proto.HandleCommand(api.CmdDisconnectShim, disconnectShim)
+	proto.HandleCommand(api.CmdSignal, signal)
+	proto.HandleStream(forwardStdin)
 
 	glog.V(1).Info("proxy started")
 
@@ -388,7 +584,7 @@ func proxyMain() {
 	}
 	proxy.serve()
 
-	// Wait for all the goroutines started by helloHandler to finish.
+	// Wait for all the goroutines started by registerVMHandler to finish.
 	//
 	// Not stricly necessary as:
 	//   • currently proxy.serve() cannot return,

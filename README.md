@@ -6,10 +6,15 @@
 
 # `cc-proxy`
 
-`cc-proxy` is a daemon offering access to the
-[`hyperstart`](https://github.com/hyperhq/hyperstart) VM agent to multiple
-clients. Only a single instance of `cc-proxy` per host is necessary as it can be
-used for several different VMs.
+`cc-proxy` works alongside the [Clear Containers runtime](
+https://github.com/clearcontainers/runtime) and [shim](
+https://github.com/clearcontainers/shim) to provide a VM-based [OCI runtime](
+https://www.opencontainers.org/) solution.
+
+`cc-proxy` is a daemon offering access to the [`hyperstart`](
+https://github.com/hyperhq/hyperstart) VM agent to both the runtime and shim
+processes. Only a single instance of `cc-proxy` per host is necessary as it can
+be used for several different VMs.
 
 ![High-level Architecture Diagram](docs/high-level-overview.png)
 
@@ -31,68 +36,9 @@ protocol on an `AF_UNIX` located at: `${localstatesdir}/run/cc-oci-runtime/proxy
 
 ## Protocol
 
-The proxy protocol is composed of messages: requests and responses. These form
-a small RPC protocol, requests being similar to a function call and responses
-encoding the result of the call.
+ the protocol interacts with the proxy is described in the [documentation of
+ the `api` package](https://godoc.org/github.com/clearcontainers/proxy/api).
 
-Each message is composed of a header and some optional data:
-
-```
-  ┌────────────────┬────────────────┬──────────────────────────────┐
-  │  Data Length   │    Reserved    │  Data (request or response)  │
-  │   (32 bits)    │    (32 bits)   │     (data length bytes)      │
-  └────────────────┴────────────────┴──────────────────────────────┘
-```
-
-- `Data Length` is in bytes and encoded in network order.
-- `Reserved` is reserved for future use.
-- `Data` is the JSON-encoded request or response data
-
-On top of of this request/response mechanism, the proxy defines `payloads`,
-which are effectively the various function calls defined in the API.
-
-Requests have 2 fields: the payload `id` (function name) and its `data`
-(function argument(s))
-
-```
-type Request struct {
-	Id    string          `json:"id"`
-	Data *json.RawMessage `json:"data,omitempty"`
-}
-```
-
-Responses have 3 fields: `success`, `error` and `data`
-
-```
-type Response struct {
-	Success bool                   `json:"success"`
-	Error   string                 `json:"error,omitempty"`
-	Data    map[string]interface{} `json:"data,omitempty"`
-}
-```
-
-Unsurprisingly, the response has the result of a command, with `success`
-indicating if the request has succeeded for not. If `success` is `true`, the
-response can carry additional return values in `data`. If success if `false`,
-`error` will contain an error string suitable for reporting the error to a
-user.
-
-As a concrete example, here is an exchange between a client and the proxy:
-
-```
-{ "id": "hello", "data": { "containerId": "foo", "ctlSerial": "/tmp/sh.hyper.channel.0.sock", "ioSerial": "/tmp/sh.hyper.channel.1.sock"  } }
-{"success":true}
-```
-
-- The client starts by calling the `hello` payload, registered the container
-  `foo` and asking the proxy to connect to hyperstart communication channels
-  given
-- The proxy answers the function call has succeeded
-
-## Payloads
-
-Payloads are in their own package and [documented there](
-https://godoc.org/github.com/clearcontainers/proxy/api)
 
 ## `systemd` integration
 

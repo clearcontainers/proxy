@@ -3,7 +3,7 @@
 script_dir=$(cd `dirname $0`; pwd)
 root_dir=`dirname $script_dir`
 
-test_packages="."
+test_packages=". ./api"
 go_test_flags="-v -race -timeout 2s"
 
 echo Running go test on packages "'$test_packages'" with flags "'$go_test_flags'"

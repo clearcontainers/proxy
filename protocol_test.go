@@ -15,15 +15,15 @@
 package main
 
 import (
-	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"flag"
 	"io"
 	"net"
 	"os"
 	"sync"
 	"testing"
+
+	"github.com/clearcontainers/proxy/api"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -72,56 +72,6 @@ func setupMockServer(t *testing.T, proto *protocol) (client net.Conn, server *mo
 	return client, server
 }
 
-// Low level read/write (header + data)
-const headerLength = 8 // bytes
-
-func writeMessage(writer io.Writer, data []byte) error {
-	buf := make([]byte, headerLength)
-	binary.BigEndian.PutUint32(buf[0:4], uint32(len(data)))
-	n, err := writer.Write(buf)
-	if err != nil {
-		return err
-	}
-	if n != headerLength {
-		return errors.New("couldn't write the full header")
-	}
-
-	n, err = writer.Write(data)
-	if err != nil {
-		return err
-	}
-	if n != len(data) {
-		return errors.New("couldn't write the full data")
-	}
-
-	return nil
-}
-
-func readMessage(reader io.Reader) ([]byte, error) {
-	buf := make([]byte, headerLength)
-	n, err := reader.Read(buf)
-	if err != nil {
-		return nil, err
-	}
-	if n != headerLength {
-		return nil, errors.New("couldn't read the full header")
-	}
-
-	received := 0
-	need := int(binary.BigEndian.Uint32(buf[0:4]))
-	data := make([]byte, need)
-	for received < need {
-		n, err := reader.Read(data[received:need])
-		if err != nil {
-			return nil, err
-		}
-
-		received += n
-	}
-
-	return data, nil
-}
-
 // Test that we correctly give back the user data to handlers
 type myUserData struct {
 	t  *testing.T
@@ -139,7 +89,7 @@ func userDataHandler(data []byte, userData interface{}, response *handlerRespons
 
 func TestUserData(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle("foo", userDataHandler)
+	proto.HandleCommand(api.Command(0), userDataHandler)
 
 	server := newMockServer(t, proto)
 	client := server.GetClientConn()
@@ -147,7 +97,7 @@ func TestUserData(t *testing.T) {
 	go server.ServeWithUserData(&testUserData)
 
 	testUserData.wg.Add(1)
-	err := writeMessage(client, []byte(`{ "id": "foo" }`))
+	err := api.WriteCommand(client, api.Command(0), nil)
 	assert.Nil(t, err)
 
 	// make sure the handler runs by waiting for it
@@ -177,63 +127,53 @@ func returnErrorHandler(data []byte, userData interface{}, response *handlerResp
 	response.SetErrorMsg("This is an error")
 }
 
-func returnDataErrorHandler(data []byte, userData interface{}, response *handlerResponse) {
-	response.AddResult("foo", "bar")
-	response.SetErrorMsg("This is an error")
-}
-
 func TestProtocol(t *testing.T) {
 	tests := []struct {
-		input, output string
+		cmd   api.Command
+		input string
+
+		result bool
+		output string
 	}{
-		{`{"id": "simple"}`, `{"success":true}`},
-		{`{"id": "notfound"}`,
-			`{"success":false,"error":"no payload named 'notfound'"}`},
-		{`{"foo": "bar"}`,
-			`{"success":false,"error":"no 'id' field in request"}`},
+		{api.Command(0), "", true, ""},
 		// Tests return values from handlers
-		{`{"id":"returnData", "data": {"arg": "bar"}}`,
-			`{"success":true,"data":{"foo":"bar"}}`},
-		{`{"id":"returnError" }`,
-			`{"success":false,"error":"This is an error"}`},
-		{`{"id":"returnDataError", "data": {"arg": "bar"}}`,
-			`{"success":false,"error":"This is an error","data":{"foo":"bar"}}`},
+		{api.Command(1), `{"arg": "bar"}`, true, `{"foo":"bar"}`},
+		{api.Command(2), "", false, `{"msg":"This is an error"}`},
 		// Tests we can unmarshal payload data
-		{`{"id":"echo", "data": {"arg": "ping"}}`,
-			`{"success":true,"data":{"result":"ping"}}`},
+		{api.Command(3), `{"arg": "ping"}`, true, `{"result":"ping"}`},
 	}
 
 	proto := newProtocol()
-	proto.Handle("simple", simpleHandler)
-	proto.Handle("returnData", returnDataHandler)
-	proto.Handle("returnError", returnErrorHandler)
-	proto.Handle("returnDataError", returnDataErrorHandler)
-	proto.Handle("echo", echoHandler)
+	proto.HandleCommand(api.Command(0), simpleHandler)
+	proto.HandleCommand(api.Command(1), returnDataHandler)
+	proto.HandleCommand(api.Command(2), returnErrorHandler)
+	proto.HandleCommand(api.Command(3), echoHandler)
 
 	client, _ := setupMockServer(t, proto)
 
 	for _, test := range tests {
 		// request
-		err := writeMessage(client, []byte(test.input))
+		err := api.WriteCommand(client, test.cmd, []byte(test.input))
 		assert.Nil(t, err)
 
 		// response
-		buf, err := readMessage(client)
+		frame, err := api.ReadFrame(client)
+		assert.Equal(t, frame.Header.InError, !test.result)
 		assert.Nil(t, err)
-		assert.Equal(t, test.output, string(buf))
+		assert.NotNil(t, frame)
+		assert.Equal(t, test.output, string(frame.Payload))
 	}
 }
 
 // Make sure the server closes the connection when encountering an error
 func TestCloseOnError(t *testing.T) {
 	proto := newProtocol()
-	proto.Handle("simple", simpleHandler)
+	proto.HandleCommand(api.Command(0), simpleHandler)
 
 	client, _ := setupMockServer(t, proto)
 
-	// request
-	const garbage string = "sekjewr"
-	err := writeMessage(client, []byte(garbage))
+	// bad request
+	err := api.WriteCommand(client, api.Command(255), nil)
 	assert.Nil(t, err)
 
 	// response

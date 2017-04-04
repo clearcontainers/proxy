@@ -17,13 +17,18 @@ package main
 import (
 	"bufio"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"sync"
+	"syscall"
+
+	"github.com/clearcontainers/proxy/api"
 
 	"github.com/containers/virtcontainers/hyperstart"
 	"github.com/golang/glog"
+	hyperapi "github.com/hyperhq/runv/hyperstart/api/json"
 )
 
 // Represents a single qemu/hyperstart instance on the system
@@ -48,6 +53,9 @@ type vm struct {
 	// numbers appear in this map.
 	ioSessions map[uint64]*ioSession
 
+	// tokenToSession associate a token to the correspoding ioSession
+	tokenToSession map[Token]*ioSession
+
 	// Used to wait for all VM-global goroutines to finish on Close()
 	wg sync.WaitGroup
 
@@ -57,29 +65,34 @@ type vm struct {
 
 // A set of I/O streams between a client and a process running inside the VM
 type ioSession struct {
+	// token is what identifies the I/O session to the external world
+	token Token
+
+	// Back pointer to the VM this session is attached to.
+	vm *vm
+
 	nStreams int
 	ioBase   uint64
+	// Have we received the EOF paquet from hyperstart for this session?
+	terminated bool
 
-	// id  of the client owning that ioSession
+	// id  of the client owning that ioSession (the shim process, usually).
 	clientID uint64
 
 	// socket connected to the fd sent over to the client
 	client net.Conn
-
-	// Used to wait for per-ioSession goroutines. Currently there's only
-	// one such goroutine, the one reading stdin data from client socket.
-	wg sync.WaitGroup
 }
 
 func newVM(id, ctlSerial, ioSerial string) *vm {
 	h := hyperstart.NewHyperstart(ctlSerial, ioSerial, "unix")
 
 	return &vm{
-		containerID:  id,
-		hyperHandler: h,
-		nextIoBase:   1,
-		ioSessions:   make(map[uint64]*ioSession),
-		vmLost:       make(chan interface{}),
+		containerID:    id,
+		hyperHandler:   h,
+		nextIoBase:     1,
+		ioSessions:     make(map[uint64]*ioSession),
+		tokenToSession: make(map[Token]*ioSession),
+		vmLost:         make(chan interface{}),
 	}
 }
 
@@ -121,11 +134,36 @@ func (vm *vm) dump(lvl glog.Level, data []byte) {
 	glog.Infof("\n%s", hex.Dump(data))
 }
 
-func (vm *vm) findSession(seq uint64) *ioSession {
+func (vm *vm) findSessionBySeq(seq uint64) *ioSession {
 	vm.Lock()
 	defer vm.Unlock()
 
 	return vm.ioSessions[seq]
+}
+
+func (vm *vm) findSessionByToken(token Token) *ioSession {
+	vm.Lock()
+	defer vm.Unlock()
+
+	return vm.tokenToSession[token]
+}
+
+func hyperstartTtyMessageToFrame(msg *hyperapi.TtyMessage, session *ioSession) *api.Frame {
+	// Exit status
+	if session.terminated && len(msg.Message) == 1 {
+		return api.NewFrame(api.TypeNotification, int(api.NotificationProcessExited), msg.Message)
+	}
+
+	// Regular stdout/err data
+	var stream api.Stream
+
+	if msg.Session == session.ioBase {
+		stream = api.StreamStdout
+	} else {
+		stream = api.StreamStderr
+	}
+
+	return api.NewFrame(api.TypeStream, int(stream), msg.Message)
 }
 
 // This function runs in a goroutine, reading data from the io channel and
@@ -138,17 +176,27 @@ func (vm *vm) ioHyperToClients() {
 			break
 		}
 
-		session := vm.findSession(msg.Session)
+		session := vm.findSessionBySeq(msg.Session)
 		if session == nil {
 			fmt.Fprintf(os.Stderr,
 				"couldn't find client with seq number %d\n", msg.Session)
 			continue
 		}
 
+		// When the process corresponding to a session exits:
+		//   1. hyperstart sends an EOF paquet, ie. data_length == 0
+		//      session.terminated tracks that condition
+		//   2. hyperstart sends the exit status paquet, ie. data_length == 1
+		if len(msg.Message) == 0 {
+			session.terminated = true
+			continue
+		}
+
 		vm.infof(1, "io", "<- writing to client #%d", session.clientID)
 		vm.dump(2, msg.Message)
 
-		err = hyperstart.SendIoMessageWithConn(session.client, msg)
+		frame := hyperstartTtyMessageToFrame(msg, session)
+		err = api.WriteFrame(session.client, frame)
 		if err != nil {
 			// When the shim is forcefully killed, it's possible we
 			// still have data to write. Ignore errors for that case.
@@ -206,70 +254,282 @@ func (vm *vm) Connect() error {
 	return nil
 }
 
-func (vm *vm) SendMessage(cmd string, data []byte) error {
-	_, err := vm.hyperHandler.SendCtlMessage(cmd, data)
+type relocationHandler func(*vm, *api.Hyper) error
+
+func relocateProcess(process *hyperapi.Process, session *ioSession) error {
+	// Make sure clients don't prefill process.Stdio and proces.Stderr
+	if process.Stdio != 0 {
+		return fmt.Errorf("expected process.Stdio to be 0, got %d", process.Stdio)
+	}
+	if process.Stderr != 0 {
+		return fmt.Errorf("expected process.Stderr to be 0, got %d", process.Stderr)
+	}
+
+	process.Stdio = session.ioBase
+
+	// When relocating a process asking for a terminal, we need to make sure
+	// Process.Stderr is 0. We only need the Stdio sequence number in that case and
+	// hyperstart will be mad at us if we specify Stderr.
+	if process.Terminal == false {
+		process.Stderr = session.ioBase + 1
+	}
+
+	return nil
+}
+
+func execcmdHandler(vm *vm, hyper *api.Hyper) error {
+	nTokens := len(hyper.Tokens)
+	if nTokens != 1 {
+		return fmt.Errorf("expected 1 token, got %d", nTokens)
+	}
+
+	cmdIn := hyperapi.ExecCommand{}
+	if err := json.Unmarshal(hyper.Data, &cmdIn); err != nil {
+		return err
+	}
+
+	token := hyper.Tokens[0]
+	session := vm.findSessionByToken(Token(token))
+	if session == nil {
+		return fmt.Errorf("unknown token %s", token)
+	}
+
+	if err := relocateProcess(&cmdIn.Process, session); err != nil {
+		return err
+	}
+
+	newData, err := json.Marshal(&cmdIn)
+	if err != nil {
+		return err
+	}
+
+	hyper.Data = newData
+
+	return nil
+}
+
+func newcontainerHandler(vm *vm, hyper *api.Hyper) error {
+	nTokens := len(hyper.Tokens)
+	if nTokens != 1 {
+		return fmt.Errorf("expected 1 token, got %d", nTokens)
+	}
+
+	cmdIn := hyperapi.Container{}
+	if err := json.Unmarshal(hyper.Data, &cmdIn); err != nil {
+		return err
+	}
+
+	token := hyper.Tokens[0]
+	session := vm.findSessionByToken(Token(token))
+	if session == nil {
+		return fmt.Errorf("unknown token %s", token)
+	}
+
+	relocateProcess(cmdIn.Process, session)
+	newData, err := json.Marshal(&cmdIn)
+	if err != nil {
+		return err
+	}
+
+	hyper.Data = newData
+
+	return nil
+}
+
+// RelocateHyperCommand performs the sequence number relocation in the
+// newcontainer and execmd hyper commands given the corresponding list of
+// tokens. Starpod isn't handled as it's not currently use to start processes
+// and indicated as deprecated in the hyperstart API.
+func (vm *vm) relocateHyperCommand(hyper *api.Hyper) error {
+	cmds := []struct {
+		name    string
+		handler relocationHandler
+	}{
+		{"newcontainer", newcontainerHandler},
+		{"execcmd", execcmdHandler},
+	}
+	needsRelocation := false
+
+	for _, cmd := range cmds {
+		if hyper.HyperName == cmd.name {
+			if err := cmd.handler(vm, hyper); err != nil {
+				return err
+			}
+			needsRelocation = true
+			break
+		}
+	}
+
+	// If a hyper command doesn't need a token but one is given anyway, reject the
+	// command.
+	numTokens := len(hyper.Tokens)
+	if !needsRelocation && numTokens > 0 {
+		return fmt.Errorf("%s doesn't need tokens but %d token(s) were given",
+			hyper.HyperName, numTokens)
+
+	}
+
+	return nil
+}
+
+func (vm *vm) SendMessage(hyper *api.Hyper) error {
+	if err := vm.relocateHyperCommand(hyper); err != nil {
+		return err
+	}
+
+	_, err := vm.hyperHandler.SendCtlMessage(hyper.HyperName, hyper.Data)
 	return err
 }
 
-// This function runs in a goroutine, reading data from the client socket and
-// writing data to the hyperstart I/O chanel.
-// There's one instance of this goroutine per client having done an allocateIO.
-func (vm *vm) ioClientToHyper(session *ioSession) {
-	for {
-		msg, err := hyperstart.ReadIoMessageWithConn(session.client)
-		if err != nil {
-			// client process is gone
-			break
-		}
-
-		if msg.Session != session.ioBase {
-			fmt.Fprintf(os.Stderr, "stdin seq %d not matching ioBase %d\n", msg.Session, session.ioBase)
-			session.client.Close()
-			break
-		}
-
-		vm.infof(1, "io", "-> writing to hyper from #%d", session.clientID)
-		vm.dump(2, msg.Message)
-
-		err = vm.hyperHandler.SendIoMessage(msg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"error writing I/O data to hyperstart: %v\n", err)
-			break
-		}
+// ForwardStdin forwards an api.Frame with stdin data to hyperstart
+func (session *ioSession) ForwardStdin(frame *api.Frame) error {
+	if frame.Header.Type != api.TypeStream {
+		return fmt.Errorf("expected stream frame got %s", frame.Header.Type)
 	}
 
-	session.wg.Done()
+	streamType := api.Stream(frame.Header.Opcode)
+	if streamType != api.StreamStdin {
+		return fmt.Errorf("expected stdin stream frame got %s", streamType)
+	}
+
+	vm := session.vm
+	msg := &hyperapi.TtyMessage{
+		Session: session.ioBase,
+		Message: frame.Payload,
+	}
+
+	vm.infof(1, "io", "-> writing to hyper from #%d", session.clientID)
+	vm.dump(2, msg.Message)
+
+	return vm.hyperHandler.SendIoMessage(msg)
 }
 
-func (vm *vm) AllocateIo(n int, clientID uint64, c net.Conn) uint64 {
-	// Allocate ioBase
+// windowSizeMessage07 is the hyperstart 0.7 winsize message payload for the
+// winsize command. This payload has changed in 0.8 so we can't use the
+// definition in the hyperapi package.
+type windowSizeMessage07 struct {
+	Seq    uint64 `json:"seq"`
+	Row    uint16 `json:"row"`
+	Column uint16 `json:"column"`
+}
+
+// SendTerminalSize sends a new terminal geometry to the process represented by
+// session.
+func (session *ioSession) SendTerminalSize(columns, rows int) error {
+	msg := &windowSizeMessage07{
+		Seq:    session.ioBase,
+		Column: uint16(columns),
+		Row:    uint16(rows),
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	_, err = session.vm.hyperHandler.SendCtlMessage("winsize", data)
+	return err
+}
+
+// SendSignal
+func (session *ioSession) SendSignal(signal syscall.Signal) error {
+	msg := &hyperapi.KillCommand{
+		Container: session.vm.containerID,
+		Signal:    signal,
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	_, err = session.vm.hyperHandler.SendCtlMessage("killcontainer", data)
+	return err
+}
+
+func (vm *vm) AllocateToken() (Token, error) {
 	vm.Lock()
+	defer vm.Unlock()
+
+	// We always allocate 2 sequence numbers (1 for stdin/out + 1 for
+	// stderr).
+	nStreams := 2
 	ioBase := vm.nextIoBase
-	vm.nextIoBase += uint64(n)
+	vm.nextIoBase += uint64(nStreams)
+
+	token, err := GenerateToken(32)
+	if err != nil {
+		return nilToken, err
+	}
 
 	session := &ioSession{
-		nStreams: n,
+		vm:       vm,
+		token:    token,
+		nStreams: nStreams,
 		ioBase:   ioBase,
-		clientID: clientID,
-		client:   c,
 	}
 
-	for i := 0; i < n; i++ {
+	// This mapping is to get the session from the seq number in an
+	// hyperstart I/O paquet.
+	for i := 0; i < nStreams; i++ {
 		vm.ioSessions[ioBase+uint64(i)] = session
 	}
-	vm.Unlock()
 
-	// Starts stdin forwarding between client and hyper
-	session.wg.Add(1)
-	go vm.ioClientToHyper(session)
+	// This mapping is to get the session from the I/O token
+	vm.tokenToSession[token] = session
 
-	return ioBase
+	return token, nil
+}
+
+// AssociateShim associates a shim given by the triplet (token, cliendID,
+// clientConn) to a vm (POD). After associating the shim, a hyper command can
+// be issued to start the process inside the VM and data can flow between shim
+// and containerized process through the shim.
+func (vm *vm) AssociateShim(token Token, clientID uint64, clientConn net.Conn) (*ioSession, error) {
+	vm.Lock()
+	defer vm.Unlock()
+
+	session := vm.tokenToSession[token]
+	if session == nil {
+		return nil, fmt.Errorf("vm: unknown token %s", token)
+	}
+
+	session.clientID = clientID
+	session.client = clientConn
+
+	return session, nil
+}
+
+func (vm *vm) freeTokenUnlocked(token Token) error {
+	session := vm.tokenToSession[token]
+	if session == nil {
+		return fmt.Errorf("vm: unknown token %s", token)
+	}
+
+	delete(vm.tokenToSession, token)
+
+	for i := 0; i < session.nStreams; i++ {
+		delete(vm.ioSessions, session.ioBase+uint64(i))
+	}
+
+	session.Close()
+
+	return nil
+}
+
+func (vm *vm) FreeToken(token Token) error {
+	vm.Lock()
+	defer vm.Unlock()
+
+	return vm.freeTokenUnlocked(token)
 }
 
 func (session *ioSession) Close() {
-	session.client.Close()
-	session.wg.Wait()
+	// We can have a session created, but no shim associated with just yet.
+	// In that case, client is nil.
+	if session.client != nil {
+		session.client.Close()
+	}
 }
 
 func (vm *vm) Close() {
@@ -278,15 +538,12 @@ func (vm *vm) Close() {
 		vm.console.conn.Close()
 	}
 
-	// Wait for per-client goroutines
+	// Garbage collect I/O sessions in case Close() was called without
+	// properly cleaning up all sessions.
 	vm.Lock()
-	for seq, session := range vm.ioSessions {
-		delete(vm.ioSessions, seq)
-		if seq != session.ioBase {
-			continue
-		}
-
-		session.Close()
+	for token := range vm.tokenToSession {
+		vm.freeTokenUnlocked(token)
+		delete(vm.tokenToSession, token)
 	}
 	vm.Unlock()
 

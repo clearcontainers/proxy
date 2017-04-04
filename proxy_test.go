@@ -1,4 +1,4 @@
-// Copyright (c) 2016 Intel Corporation
+// Copyright (c) 2016,2017 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,23 +15,21 @@
 package main
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"flag"
-	"fmt"
-	"io"
 	"net"
 	"os"
-	"os/exec"
+	"strings"
 	"sync"
-	"syscall"
 	"testing"
-	"time"
 
 	"github.com/clearcontainers/proxy/api"
+	goapi "github.com/clearcontainers/proxy/client"
 	"github.com/containers/virtcontainers/hyperstart/mock"
 
-	hyper "github.com/hyperhq/runv/hyperstart/api/json"
+	"syscall"
+
+	hyperapi "github.com/hyperhq/runv/hyperstart/api/json"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -48,32 +46,35 @@ type testRig struct {
 	proxyFork bool
 
 	// proxy, in process
-	proxy     *proxy
-	protocol  *protocol
-	proxyConn net.Conn // socket used by proxy to communicate with Client
-
-	// proxy, forked
-	proxySocketPath string
-	proxyCommand    *exec.Cmd
+	proxy      *proxy
+	protocol   *protocol
+	proxyConns []net.Conn // sockets used by proxy to communicate with Client
 
 	// client
-	Client *api.Client
+	Client *goapi.Client
 
 	// fd leak detection
 	detector          *FdLeakDetector
 	startFds, stopFds *FdSnapshot
 }
 
-func newTestRig(t *testing.T, proto *protocol) *testRig {
+func newTestRig(t *testing.T) *testRig {
+	proto := newProtocol()
+	proto.HandleCommand(api.CmdRegisterVM, registerVM)
+	proto.HandleCommand(api.CmdAttachVM, attachVM)
+	proto.HandleCommand(api.CmdUnregisterVM, unregisterVM)
+	proto.HandleCommand(api.CmdHyper, hyper)
+	proto.HandleCommand(api.CmdConnectShim, connectShim)
+	proto.HandleCommand(api.CmdDisconnectShim, disconnectShim)
+	proto.HandleCommand(api.CmdSignal, signal)
+	proto.HandleStream(forwardStdin)
+
 	return &testRig{
 		t:        t,
 		protocol: proto,
+		proxy:    newProxy(),
 		detector: NewFdLeadDetector(),
 	}
-}
-
-func (rig *testRig) SetFork(fork bool) {
-	rig.proxyFork = fork
 }
 
 func (rig *testRig) Start() {
@@ -92,77 +93,13 @@ func (rig *testRig) Start() {
 	// Explicitly send READY message from hyperstart mock
 	rig.wg.Add(1)
 	go func() {
-		rig.Hyperstart.SendMessage(int(hyper.INIT_READY), []byte{})
+		rig.Hyperstart.SendMessage(int(hyperapi.INIT_READY), []byte{})
 		rig.wg.Done()
 	}()
 
-	// we can either "start" the proxy in process or spawn a proxy process.
-	// Spawning the process (through TestLaunchProxy).
-	// Passing a file descriptor through connected AF_UNIX sockets in the
-	// same thread has a slight behaviour difference which breaks the
-	// barrier between two reads(), so we spawn a process in that case.
-	var clientConn net.Conn
-
-	if rig.proxyFork {
-		rig.proxySocketPath = mock.GetTmpPath("test-proxy.%s.sock")
-		rig.proxyCommand = proxyCommand(rig.proxySocketPath)
-		err = rig.proxyCommand.Start()
-		assert.Nil(rig.t, err)
-		//output, err := rig.proxyCommand.CombinedOutput()
-		//fmt.Fprintln(os.Stderr, hex.Dump(output))
-		for i := 0; i < 2000; i++ {
-			// XXX: We might want a mode where the proxy forks as
-			// soon as it listens on its socket so we have a way to
-			// known when we can connect to the proxy socket.
-			time.Sleep(1 * time.Millisecond)
-			clientConn, err = net.Dial("unix", rig.proxySocketPath)
-			if err == nil {
-				break
-			}
-		}
-		assert.NotNil(rig.t, clientConn)
-		rig.wg.Add(1)
-		go func() {
-			rig.proxyCommand.Wait()
-			rig.wg.Done()
-		}()
-	} else {
-		// client <-> proxy connection
-		clientConn, rig.proxyConn, err = Socketpair()
-		assert.Nil(rig.t, err)
-		// Start proxy main go routine
-		rig.proxy = newProxy()
-		rig.wg.Add(1)
-		go func() {
-			rig.proxy.serveNewClient(rig.protocol, rig.proxyConn)
-			rig.wg.Done()
-		}()
-	}
-
 	// Client object that can be used to issue proxy commands
-	rig.Client = api.NewClient(clientConn.(*net.UnixConn))
-}
-
-// A fake test we use to lauch a full proxy process
-func proxyCommand(socketPath string) *exec.Cmd {
-	cs := []string{"-test.run=TestLaunchProxy"}
-	cmd := exec.Command(os.Args[0], cs...)
-
-	socketEnv := fmt.Sprintf("CC_TEST_SOCKET_PATH=%s", socketPath)
-	cmd.Env = []string{"CC_TEST_PROXY_PROCESS=1", socketEnv}
-
-	return cmd
-}
-
-func TestLaunchProxy(t *testing.T) {
-	if os.Getenv("CC_TEST_PROXY_PROCESS") != "1" {
-		return
-	}
-
-	// used in proxy.go for the non socket-activated case
-	DefaultSocketPath = os.Getenv("CC_TEST_SOCKET_PATH")
-
-	proxyMain()
+	clientConn := rig.ServeNewClient()
+	rig.Client = goapi.NewClient(clientConn.(*net.UnixConn))
 }
 
 func (rig *testRig) Stop() {
@@ -170,18 +107,8 @@ func (rig *testRig) Stop() {
 
 	rig.Client.Close()
 
-	if rig.proxyCommand != nil {
-		cmd := rig.proxyCommand
-		if cmd.Process != nil {
-			syscall.Kill(cmd.Process.Pid, syscall.SIGTERM)
-		}
-	}
-	if rig.proxyConn != nil {
-		rig.proxyConn.Close()
-	}
-	if rig.proxySocketPath != "" {
-		//os.Remove(rig.proxySocketPath)
-
+	for _, conn := range rig.proxyConns {
+		conn.Close()
 	}
 
 	rig.Hyperstart.Stop()
@@ -201,29 +128,41 @@ func (rig *testRig) Stop() {
 		rig.detector.Compare(os.Stdout, rig.startFds, rig.stopFds))
 }
 
+// ServeNewClient simulate a new client connecting to the proxy. It returns the
+// net.Conn that represents client-side connection to the proxy.
+func (rig *testRig) ServeNewClient() net.Conn {
+	clientConn, proxyConn, err := Socketpair()
+	assert.Nil(rig.t, err)
+	rig.proxyConns = append(rig.proxyConns, proxyConn)
+	rig.wg.Add(1)
+	go func() {
+		rig.proxy.serveNewClient(rig.protocol, proxyConn)
+		rig.wg.Done()
+	}()
+
+	return clientConn
+}
+
 const testContainerID = "0987654321"
 
-func TestHello(t *testing.T) {
-	proto := newProtocol()
-	proto.Handle("hello", helloHandler)
-
-	rig := newTestRig(t, proto)
+func TestRegisterVM(t *testing.T) {
+	rig := newTestRig(t)
 	rig.Start()
 
-	// Register new VM
+	// Register new VM.
 	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
-	ret, err := rig.Client.Hello(testContainerID, ctlSocketPath, ioSocketPath, nil)
+	ret, err := rig.Client.RegisterVM(testContainerID, ctlSocketPath, ioSocketPath, nil)
 	assert.Nil(t, err)
 	assert.NotNil(t, ret)
+	// We haven't asked for I/O tokens
+	assert.Equal(t, "", ret.IO.URL)
+	assert.Equal(t, 0, len(ret.IO.Tokens))
 
-	// Check that Hello returns the protocol version
-	assert.Equal(t, api.Version, ret.Version)
-
-	// A new Hello message with the same containerID should error out
-	_, err = rig.Client.Hello(testContainerID, "fooCtl", "fooIo", nil)
+	// A new RegisterVM message with the same containerID should error out.
+	_, err = rig.Client.RegisterVM(testContainerID, "fooCtl", "fooIo", nil)
 	assert.NotNil(t, err)
 
-	// Hello should register a new vm object
+	// RegisterVM should register a new vm object.
 	proxy := rig.proxy
 	proxy.Lock()
 	vm := proxy.vms[testContainerID]
@@ -232,39 +171,36 @@ func TestHello(t *testing.T) {
 	assert.NotNil(t, vm)
 	assert.Equal(t, testContainerID, vm.containerID)
 
-	// This test shouldn't send anything to hyperstart
+	// This test shouldn't send anything to hyperstart.
 	msgs := rig.Hyperstart.GetLastMessages()
 	assert.Equal(t, 0, len(msgs))
 
 	rig.Stop()
 }
 
-func TestBye(t *testing.T) {
-	proto := newProtocol()
-	proto.Handle("hello", helloHandler)
-	proto.Handle("bye", byeHandler)
-
-	rig := newTestRig(t, proto)
+func TestUnregisterVM(t *testing.T) {
+	rig := newTestRig(t)
 	rig.Start()
 
 	// Register new VM
 	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
-	_, err := rig.Client.Hello(testContainerID, ctlSocketPath, ioSocketPath, nil)
+	_, err := rig.Client.RegisterVM(testContainerID, ctlSocketPath, ioSocketPath, nil)
 	assert.Nil(t, err)
 
-	// Bye with a bad containerID
-	err = rig.Client.Bye("foo")
+	// UnregisterVM with a bad containerID.
+	err = rig.Client.UnregisterVM("foo")
 	assert.NotNil(t, err)
 
 	// Bye!
-	err = rig.Client.Bye(testContainerID)
+	err = rig.Client.UnregisterVM(testContainerID)
 	assert.Nil(t, err)
 
-	// A second Bye (client not attached anymore) should return an error
-	err = rig.Client.Bye(testContainerID)
+	// A second UnregisterVM (client not attached anymore) should return an
+	// error.
+	err = rig.Client.UnregisterVM(testContainerID)
 	assert.NotNil(t, err)
 
-	// Bye should unregister the vm object
+	// UnregisterVM should unregister the vm object
 	proxy := rig.proxy
 	proxy.Lock()
 	vm := proxy.vms[testContainerID]
@@ -278,33 +214,29 @@ func TestBye(t *testing.T) {
 	rig.Stop()
 }
 
-func TestAttach(t *testing.T) {
-	proto := newProtocol()
-	proto.Handle("hello", helloHandler)
-	proto.Handle("attach", attachHandler)
-	proto.Handle("bye", byeHandler)
-
-	rig := newTestRig(t, proto)
+func TestAttachVM(t *testing.T) {
+	rig := newTestRig(t)
 	rig.Start()
 
 	// Register new VM
 	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
-	_, err := rig.Client.Hello(testContainerID, ctlSocketPath, ioSocketPath, nil)
+	_, err := rig.Client.RegisterVM(testContainerID, ctlSocketPath, ioSocketPath, nil)
 	assert.Nil(t, err)
 
 	// Attaching to an unknown VM should return an error
-	_, err = rig.Client.Attach("foo", nil)
+	_, err = rig.Client.AttachVM("foo", nil)
 	assert.NotNil(t, err)
 
 	// Attaching to an existing VM should work. To test we are effectively
-	// attached, we issue a bye that would error out if not attached.
-	ret, err := rig.Client.Attach(testContainerID, nil)
+	// attached, we issue an UnregisterVM that would error out if not
+	// attached.
+	ret, err := rig.Client.AttachVM(testContainerID, nil)
 	assert.Nil(t, err)
+	// We haven't asked for I/O tokens
+	assert.Equal(t, "", ret.IO.URL)
+	assert.Equal(t, 0, len(ret.IO.Tokens))
 
-	// Check that Attach returns the protocol version
-	assert.Equal(t, api.Version, ret.Version)
-
-	err = rig.Client.Bye(testContainerID)
+	err = rig.Client.UnregisterVM(testContainerID)
 	assert.Nil(t, err)
 
 	// This test shouldn't send anything with hyperstart
@@ -315,15 +247,11 @@ func TestAttach(t *testing.T) {
 }
 
 func TestHyperPing(t *testing.T) {
-	proto := newProtocol()
-	proto.Handle("hello", helloHandler)
-	proto.Handle("hyper", hyperHandler)
-
-	rig := newTestRig(t, proto)
+	rig := newTestRig(t)
 	rig.Start()
 
 	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
-	_, err := rig.Client.Hello(testContainerID, ctlSocketPath, ioSocketPath, nil)
+	_, err := rig.Client.RegisterVM(testContainerID, ctlSocketPath, ioSocketPath, nil)
 	assert.Nil(t, err)
 
 	// Send ping and verify we have indeed received the message on the
@@ -336,29 +264,25 @@ func TestHyperPing(t *testing.T) {
 	assert.Equal(t, 1, len(msgs))
 
 	msg := msgs[0]
-	assert.Equal(t, hyper.INIT_PING, int(msg.Code))
+	assert.Equal(t, hyperapi.INIT_PING, int(msg.Code))
 	assert.Equal(t, 0, len(msg.Message))
 
 	rig.Stop()
 }
 
 func TestHyperStartpod(t *testing.T) {
-	proto := newProtocol()
-	proto.Handle("hello", helloHandler)
-	proto.Handle("hyper", hyperHandler)
-
-	rig := newTestRig(t, proto)
+	rig := newTestRig(t)
 	rig.Start()
 
 	// Register new VM
 	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
-	_, err := rig.Client.Hello(testContainerID, ctlSocketPath, ioSocketPath, nil)
+	_, err := rig.Client.RegisterVM(testContainerID, ctlSocketPath, ioSocketPath, nil)
 	assert.Nil(t, err)
 
 	// Send startopd and verify we have indeed received the message on the
 	// hyperstart side. startpod is interesting because it's a case of an
 	// hyper message with JSON data.
-	startpod := hyper.Pod{
+	startpod := hyperapi.Pod{
 		Hostname: "testhostname",
 		ShareDir: "rootfs",
 	}
@@ -369,8 +293,8 @@ func TestHyperStartpod(t *testing.T) {
 	assert.Equal(t, 1, len(msgs))
 
 	msg := msgs[0]
-	assert.Equal(t, hyper.INIT_STARTPOD, int(msg.Code))
-	received := hyper.Pod{}
+	assert.Equal(t, hyperapi.INIT_STARTPOD, int(msg.Code))
+	received := hyperapi.Pod{}
 	err = json.Unmarshal(msg.Message, &received)
 	assert.Nil(t, err)
 	assert.Equal(t, startpod.Hostname, received.Hostname)
@@ -379,121 +303,296 @@ func TestHyperStartpod(t *testing.T) {
 	rig.Stop()
 }
 
-// header for hyperstart's I/O channel packets is 12 bytes
-const ioHeaderLength = 12
+func TestRegisterVMAllocateTokens(t *testing.T) {
+	rig := newTestRig(t)
+	rig.Start()
 
-// write a chunk of data to an I/O fd
-func writeIo(t *testing.T, writer io.Writer, seq uint64, data []byte) {
-	length := ioHeaderLength + len(data)
-	header := make([]byte, ioHeaderLength)
-
-	binary.BigEndian.PutUint64(header[:], uint64(seq))
-	binary.BigEndian.PutUint32(header[8:], uint32(length))
-	n, err := writer.Write(header)
+	// Register new VM, asking for tokens
+	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
+	ret, err := rig.Client.RegisterVM(testContainerID, ctlSocketPath, ioSocketPath,
+		&goapi.RegisterVMOptions{NumIOStreams: 2})
 	assert.Nil(t, err)
-	assert.Equal(t, ioHeaderLength, n)
+	assert.NotNil(t, ret)
+	assert.True(t, strings.HasPrefix(ret.IO.URL, "unix://"))
+	assert.Equal(t, 2, len(ret.IO.Tokens))
 
-	n, err = writer.Write(data)
-	assert.Nil(t, err)
-	assert.Equal(t, len(data), n)
+	// This test shouldn't send anything to hyperstart.
+	msgs := rig.Hyperstart.GetLastMessages()
+	assert.Equal(t, 0, len(msgs))
+
+	rig.Stop()
 }
 
-// read a chunk of data from an I/O fd
-func readIo(t *testing.T, reader io.Reader) (seq uint64, data []byte) {
-	buf := make([]byte, ioHeaderLength)
-	n, err := reader.Read(buf)
-	assert.Nil(t, err)
-	assert.Equal(t, ioHeaderLength, n)
-
-	seq = binary.BigEndian.Uint64(buf[:8])
-	length := binary.BigEndian.Uint32(buf[8:12]) - ioHeaderLength
-	if length == 0 {
-		return
-	}
-
-	received := 0
-	need := int(length)
-	data = make([]byte, need)
-	for received < need {
-		n, err := reader.Read(data[received:need])
-		assert.Nil(t, err)
-
-		received += n
-	}
-
-	return
-}
-
-func TestAllocateIo(t *testing.T) {
-	proto := newProtocol()
-	proto.Handle("hello", helloHandler)
-	proto.Handle("allocateIO", allocateIoHandler)
-
-	rig := newTestRig(t, proto)
-	//rig.SetFork(true)
+func TestAttachVMAllocateTokens(t *testing.T) {
+	rig := newTestRig(t)
 	rig.Start()
 
 	// Register new VM
 	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
-	_, err := rig.Client.Hello(testContainerID, ctlSocketPath, ioSocketPath, nil)
+	_, err := rig.Client.RegisterVM(testContainerID, ctlSocketPath, ioSocketPath, nil)
 	assert.Nil(t, err)
 
-	// Allocate 2 seq numbers and verify we can use the fd passed from
-	// allocate I/O to send and receive data.
-	ioBase, ioFile, err := rig.Client.AllocateIo(2)
+	// Attach to the VM, asking for tokens
+	ret, err := rig.Client.AttachVM(testContainerID, &goapi.AttachVMOptions{NumIOStreams: 2})
+	assert.Nil(t, err)
+	assert.NotNil(t, ret)
+	assert.True(t, strings.HasPrefix(ret.IO.URL, "unix://"))
+	assert.Equal(t, 2, len(ret.IO.Tokens))
+
+	// Cleanup
+	err = rig.Client.UnregisterVM(testContainerID)
 	assert.Nil(t, err)
 
-	// we always start our allocations from 1
-	assert.Equal(t, uint64(1), ioBase)
+	// This test shouldn't send anything with hyperstart
+	msgs := rig.Hyperstart.GetLastMessages()
+	assert.Equal(t, 0, len(msgs))
 
-	// make hyperstart send something on stdout/stderr and verify we
-	// receive it
-	streams := []struct {
-		seq  uint64
-		data string
-	}{
-		{ioBase, "stdout\n"},
-		{ioBase + 1, "stderr\n"},
+	rig.Stop()
+}
+
+func TestConnectShim(t *testing.T) {
+	rig := newTestRig(t)
+	rig.Start()
+
+	// Register new VM, asking for tokens. We use the assumption the same
+	// connection can be used for ConnectShim, which is true in the tests.
+	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
+	ret, err := rig.Client.RegisterVM(testContainerID, ctlSocketPath, ioSocketPath,
+		&goapi.RegisterVMOptions{NumIOStreams: 1})
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(ret.IO.Tokens))
+	token := ret.IO.Tokens[0]
+
+	// Using a bad token should result in an error
+	err = rig.Client.ConnectShim("notatoken")
+	assert.NotNil(t, err)
+
+	// Register shim with an existing token, all should be good
+	err = rig.Client.ConnectShim(token)
+	assert.Nil(t, err)
+
+	// Trying to re-use a token that a process has already claimed should
+	// result in an error.
+	err = rig.Client.ConnectShim(token)
+	assert.NotNil(t, err)
+
+	// Cleanup
+	err = rig.Client.DisconnectShim()
+	assert.Nil(t, err)
+
+	// This test shouldn't send anything to hyperstart.
+	msgs := rig.Hyperstart.GetLastMessages()
+	assert.Equal(t, 0, len(msgs))
+
+	rig.Stop()
+}
+
+// Relocations are thoroughly tested in vm_test.go, this is just to ensure we
+// have coverage at a higher level.
+func TestHyperSequenceNumberRelocation(t *testing.T) {
+	rig := newTestRig(t)
+	rig.Start()
+
+	// Register new VM, asking for tokens. We use the assumption the same
+	// connection can be used for ConnectShim, which is true in the tests.
+	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
+	ret, err := rig.Client.RegisterVM(
+		testContainerID, ctlSocketPath, ioSocketPath,
+		&goapi.RegisterVMOptions{NumIOStreams: 1})
+	assert.Nil(t, err)
+	tokens := ret.IO.Tokens
+	assert.Equal(t, 1, len(tokens))
+
+	// Send newcontainer hyper command
+	newcontainer := hyperapi.Container{
+		Id: testContainerID,
+		Process: &hyperapi.Process{
+			Args: []string{"/bin/sh"},
+		},
 	}
+	err = rig.Client.HyperWithTokens("newcontainer", tokens, &newcontainer)
+	assert.Nil(t, err)
+
+	// Verify hyperstart has received the message with relocation
+	msgs := rig.Hyperstart.GetLastMessages()
+	assert.Equal(t, 1, len(msgs))
+	msg := msgs[0]
+	assert.Equal(t, uint32(hyperapi.INIT_NEWCONTAINER), msg.Code)
+	payload := hyperapi.Container{}
+	err = json.Unmarshal(msg.Message, &payload)
+	assert.Nil(t, err)
+	assert.NotEqual(t, 0, payload.Process.Stdio)
+	assert.NotEqual(t, 0, payload.Process.Stderr)
+
+	rig.Stop()
+}
+
+type shimRig struct {
+	t      *testing.T
+	token  string
+	conn   net.Conn
+	client *goapi.Client
+}
+
+func newShimRig(t *testing.T, conn net.Conn, token string) *shimRig {
+	return &shimRig{
+		t:      t,
+		token:  token,
+		conn:   conn,
+		client: goapi.NewClient(conn.(*net.UnixConn)),
+	}
+}
+
+func (rig *shimRig) connect() error {
+	return rig.client.ConnectShim(rig.token)
+}
+
+func (rig *shimRig) close() {
+	rig.client.DisconnectShim()
+	rig.conn.Close()
+}
+
+func (rig *shimRig) writeIOString(msg string) {
+	api.WriteStream(rig.conn, api.StreamStdin, []byte(msg))
+}
+
+func (rig *shimRig) readIOStream() *api.Frame {
+	frame, err := api.ReadFrame(rig.conn)
+	assert.Nil(rig.t, err)
+	assert.Equal(rig.t, api.TypeStream, frame.Header.Type)
+	return frame
+}
+
+// peekIOSession returns the ioSession corresponding to token
+func peekIOSession(proxy *proxy, tokenStr string) *ioSession {
+	token := Token(tokenStr)
+
+	proxy.Lock()
+	defer proxy.Unlock()
+
+	info := proxy.tokenToVM[token]
+	if info == nil {
+		return nil
+	}
+
+	return info.vm.findSessionByToken(token)
+}
+
+func TestShimIO(t *testing.T) {
+	rig := newTestRig(t)
+	rig.Start()
+
+	// Register new VM, asking for tokens. We use the assumption the same
+	// connection can be used for ConnectShim, which is true in the tests.
+	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
+	ret, err := rig.Client.RegisterVM(testContainerID, ctlSocketPath, ioSocketPath,
+		&goapi.RegisterVMOptions{NumIOStreams: 1})
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(ret.IO.Tokens))
+	token := ret.IO.Tokens[0]
+	session := peekIOSession(rig.proxy, token)
+
+	// Create a new connection for the shim and register it.
+	shimConn := rig.ServeNewClient()
+	shim := newShimRig(t, shimConn, token)
+	err = shim.connect()
+	assert.Nil(t, err)
+
+	// Send stdin data.
+	stdinData := "stdin\n"
+	shim.writeIOString(stdinData)
+
+	// Check stdin data arrives correctly to hyperstart.
 	buf := make([]byte, 32)
-	for _, stream := range streams {
-		rig.Hyperstart.SendIoString(stream.seq, stream.data)
-		n, err := ioFile.Read(buf)
-		assert.Nil(t, err)
-		// 12 is the length of the header on the hyperstart I/O channel
-		assert.True(t, n > 12)
-		assert.Equal(t, len(stream.data)+12, n)
-		assert.Equal(t, stream.data, string(buf[12:n]))
-	}
-
-	// same thing for stdin
-	const stdinData = "stdin\n"
-	writeIo(t, ioFile, ioBase, []byte(stdinData))
-
-	buf = make([]byte, 32)
 	n, seq := rig.Hyperstart.ReadIo(buf)
-	assert.Equal(t, ioBase, seq)
-	assert.True(t, n > 12)
+	assert.Equal(t, session.ioBase, seq)
 	assert.Equal(t, len(stdinData)+12, n)
 	assert.Equal(t, stdinData, string(buf[12:n]))
+	assert.Nil(t, err)
 
-	// Simulate the process exiting on the hyperstart end and check we
-	// receive the exit status
-	rig.Hyperstart.CloseIo(ioBase)
-	rig.Hyperstart.SendExitStatus(ioBase, 17)
+	// make hyperstart send something on stdout/stderr and verify we
+	// receive it.
+	streams := []struct {
+		seq    uint64
+		stream api.Stream
+		data   string
+	}{
+		{session.ioBase, api.StreamStdout, "stdout\n"},
+		{session.ioBase + 1, api.StreamStderr, "stderr\n"},
+	}
 
-	// close
-	seq, data := readIo(t, ioFile)
-	assert.Equal(t, ioBase, seq)
-	assert.Equal(t, 0, len(data))
+	for _, stream := range streams {
+		rig.Hyperstart.SendIoString(stream.seq, stream.data)
+		frame := shim.readIOStream()
+		n := len(stream.data)
+		assert.NotNil(t, frame)
+		assert.Equal(t, api.TypeStream, frame.Header.Type)
+		assert.Equal(t, stream.stream, api.Stream(frame.Header.Opcode))
+		assert.Equal(t, n, len(frame.Payload))
+		assert.Equal(t, stream.data, string(frame.Payload[:n]))
+	}
 
-	// exit status
-	seq, data = readIo(t, ioFile)
-	assert.Equal(t, ioBase, seq)
-	assert.Equal(t, 1, len(data))
-	assert.Equal(t, uint8(17), data[0])
+	// Make hypertart send an exit status an test we receive it.
+	rig.Hyperstart.CloseIo(session.ioBase)
+	rig.Hyperstart.SendExitStatus(session.ioBase, 42)
 
-	ioFile.Close()
+	frame, err := api.ReadFrame(shim.conn)
+	assert.Nil(t, err)
+	assert.Equal(t, api.TypeNotification, frame.Header.Type)
+	assert.Equal(t, api.NotificationProcessExited, frame.Header.Opcode)
+	assert.Equal(t, 1, frame.Header.PayloadLength)
+	assert.Equal(t, 1, len(frame.Payload))
+	assert.Equal(t, byte(42), frame.Payload[0])
+
+	// Cleanup
+	shim.close()
+
+	rig.Stop()
+}
+
+func TestShimSignal(t *testing.T) {
+	rig := newTestRig(t)
+	rig.Start()
+
+	// Register new VM, asking for tokens. We use the assumption the same
+	// connection can be used for ConnectShim, which is true in the tests.
+	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
+	ret, err := rig.Client.RegisterVM(testContainerID, ctlSocketPath, ioSocketPath,
+		&goapi.RegisterVMOptions{NumIOStreams: 1})
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(ret.IO.Tokens))
+	token := ret.IO.Tokens[0]
+	session := peekIOSession(rig.proxy, token)
+
+	// Create a new connection for the shim and register it.
+	shimConn := rig.ServeNewClient()
+	shim := newShimRig(t, shimConn, token)
+	err = shim.connect()
+	assert.Nil(t, err)
+
+	// Send signal and check hyperstart receives the right thing.
+	shim.client.Kill(syscall.SIGUSR1)
+	msgs := rig.Hyperstart.GetLastMessages()
+	assert.Equal(t, 1, len(msgs))
+	decoded := hyperapi.KillCommand{}
+	err = json.Unmarshal(msgs[0].Message, &decoded)
+	assert.Nil(t, err)
+	assert.Equal(t, syscall.SIGUSR1, decoded.Signal)
+	assert.Equal(t, testContainerID, decoded.Container)
+
+	// Send new window size and check hyperstart receives the right thing.
+	shim.client.SendTerminalSize(42, 24)
+	msgs = rig.Hyperstart.GetLastMessages()
+	assert.Equal(t, 1, len(msgs))
+	decoded1 := windowSizeMessage07{}
+	err = json.Unmarshal(msgs[0].Message, &decoded1)
+	assert.Nil(t, err)
+	assert.Equal(t, session.ioBase, decoded1.Seq)
+	assert.Equal(t, uint16(42), decoded1.Column)
+	assert.Equal(t, uint16(24), decoded1.Row)
+
+	// Cleanup
+	shim.close()
 
 	rig.Stop()
 }

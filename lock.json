@@ -1,0 +1,28 @@
+{
+    "memo": "",
+    "projects": [
+        {
+            "name": "github.com/containers/virtcontainers",
+            "revision": "8edf47260fafc8ca7f58fd2ff3f773730f2b4df8",
+            "packages": [
+                "pkg/hyperstart"
+            ]
+        },
+        {
+            "name": "github.com/golang/glog",
+            "branch": "master",
+            "revision": "23def4e6c14b4da8ac2ed8007337bc5eb5007998",
+            "packages": [
+                "."
+            ]
+        },
+        {
+            "name": "github.com/hyperhq/runv",
+            "branch": "master",
+            "revision": "a88ec00ebbcda1293a84403a848637969a812830",
+            "packages": [
+                "hyperstart/api/json"
+            ]
+        }
+    ]
+}

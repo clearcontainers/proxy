@@ -1,0 +1,13 @@
+{
+    "dependencies": {
+        "github.com/containers/virtcontainers": {
+            "revision": "8edf47260fafc8ca7f58fd2ff3f773730f2b4df8"
+        },
+        "github.com/golang/glog": {
+            "branch": "master"
+        },
+        "github.com/hyperhq/runv": {
+            "branch": "master"
+        }
+    }
+}

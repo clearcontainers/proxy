@@ -5,9 +5,6 @@
         },
         "github.com/golang/glog": {
             "branch": "master"
-        },
-        "github.com/hyperhq/runv": {
-            "branch": "master"
         }
     }
 }

@@ -1,5 +1,5 @@
 {
-    "memo": "4943dc5956e8a4ba725d3e23065449ef8e8ceadf9e07c4842c24a1f40c4f6465",
+    "memo": "0941f12084946c8d7628339ab943f87d8d0fe6cb7c1829c8b605776e195064d2",
     "projects": [
         {
             "name": "github.com/Sirupsen/logrus",
@@ -31,14 +31,6 @@
             "revision": "23def4e6c14b4da8ac2ed8007337bc5eb5007998",
             "packages": [
                 "."
-            ]
-        },
-        {
-            "name": "github.com/hyperhq/runv",
-            "branch": "master",
-            "revision": "a88ec00ebbcda1293a84403a848637969a812830",
-            "packages": [
-                "hyperstart/api/json"
             ]
         },
         {

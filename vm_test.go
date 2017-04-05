@@ -20,8 +20,8 @@ import (
 	"testing"
 
 	"github.com/clearcontainers/proxy/api"
+	"github.com/containers/virtcontainers/pkg/hyperstart"
 	"github.com/containers/virtcontainers/pkg/hyperstart/mock"
-	hyperapi "github.com/hyperhq/runv/hyperstart/api/json"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -50,7 +50,7 @@ func (rig *vmRig) Start() {
 	// Explicitly send READY message from hyperstart mock
 	rig.wg.Add(1)
 	go func() {
-		rig.Hyperstart.SendMessage(int(hyperapi.INIT_READY), []byte{})
+		rig.Hyperstart.SendMessage(int(hyperstart.ReadyCode), []byte{})
 		rig.wg.Done()
 	}()
 
@@ -77,10 +77,10 @@ func (rig *vmRig) CreateVM() *vm {
 	return vm
 }
 
-func (rig *vmRig) createBaseProcess() *hyperapi.Process {
-	return &hyperapi.Process{
+func (rig *vmRig) createBaseProcess() *hyperstart.Process {
+	return &hyperstart.Process{
 		Args: []string{"/bin/sh"},
-		Envs: []hyperapi.EnvironmentVar{
+		Envs: []hyperstart.EnvironmentVar{
 			{
 				Env:   "PATH",
 				Value: "/sbin:/usr/sbin:/bin:/usr/bin",
@@ -108,7 +108,7 @@ func (rig *vmRig) createHyperCmd(vm *vm, cmdName string, numTokens int, data []b
 
 func (rig *vmRig) createNewcontainer(vm *vm, numTokens int) *api.Hyper {
 	process := rig.createBaseProcess()
-	cmd := hyperapi.Container{
+	cmd := hyperstart.Container{
 		Process: process,
 	}
 
@@ -134,7 +134,7 @@ func TestHyperRelocationNewcontainer(t *testing.T) {
 	// Check that the relocated command contains the seq numbers
 	// corresponding to the token.
 	session := vm.findSessionByToken(Token(token))
-	cmdOut := hyperapi.Container{}
+	cmdOut := hyperstart.Container{}
 	err = json.Unmarshal(cmd.Data, &cmdOut)
 	assert.Nil(t, err)
 	assert.Equal(t, session.ioBase, cmdOut.Process.Stdio)
@@ -156,7 +156,7 @@ func TestHyperRelocationNewcontainer(t *testing.T) {
 
 func (rig *vmRig) createExecmd(vm *vm, numTokens int) *api.Hyper {
 	process := rig.createBaseProcess()
-	cmd := hyperapi.ExecCommand{
+	cmd := hyperstart.ExecCommand{
 		Process: *process,
 	}
 
@@ -182,7 +182,7 @@ func TestHyperRelocationExeccmd(t *testing.T) {
 	// Check that the relocated command contains the seq numbers
 	// corresponding to the token.
 	session := vm.findSessionByToken(Token(token))
-	cmdOut := hyperapi.ExecCommand{}
+	cmdOut := hyperstart.ExecCommand{}
 	err = json.Unmarshal(cmd.Data, &cmdOut)
 	assert.Nil(t, err)
 	assert.Equal(t, session.ioBase, cmdOut.Process.Stdio)
@@ -224,7 +224,7 @@ func TestHyperRelocationPing(t *testing.T) {
 }
 
 func TestRelocateProcessNonZeroSequenceNumbers(t *testing.T) {
-	process := &hyperapi.Process{
+	process := &hyperstart.Process{
 		Args: []string{"/bin/sh"},
 	}
 	session := &ioSession{
@@ -243,7 +243,7 @@ func TestRelocateProcessNonZeroSequenceNumbers(t *testing.T) {
 }
 
 func TestRelocateInteractiveProcess(t *testing.T) {
-	process := &hyperapi.Process{
+	process := &hyperstart.Process{
 		Args:     []string{"/bin/sh"},
 		Terminal: true,
 	}

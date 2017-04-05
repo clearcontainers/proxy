@@ -149,9 +149,9 @@ func TestHyperRelocationNewcontainer(t *testing.T) {
 	err = vm.relocateHyperCommand(cmd)
 	assert.NotNil(t, err)
 
-	vm.Close()
-
 	rig.Stop()
+
+	vm.Close()
 }
 
 func (rig *vmRig) createExecmd(vm *vm, numTokens int) *api.Hyper {
@@ -197,10 +197,9 @@ func TestHyperRelocationExeccmd(t *testing.T) {
 	err = vm.relocateHyperCommand(cmd)
 	assert.NotNil(t, err)
 
-	vm.Close()
-
 	rig.Stop()
 
+	vm.Close()
 }
 
 // A command that doesn't require tokens should error out if one is supplied
@@ -219,8 +218,9 @@ func TestHyperRelocationPing(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Equal(t, originalCmd, *cmd)
 
-	vm.Close()
 	rig.Stop()
+
+	vm.Close()
 }
 
 func TestRelocateProcessNonZeroSequenceNumbers(t *testing.T) {

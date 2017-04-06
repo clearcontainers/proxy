@@ -26,9 +26,8 @@ import (
 
 	"github.com/clearcontainers/proxy/api"
 
-	"github.com/containers/virtcontainers/hyperstart"
+	"github.com/containers/virtcontainers/pkg/hyperstart"
 	"github.com/golang/glog"
-	hyperapi "github.com/hyperhq/runv/hyperstart/api/json"
 )
 
 // Represents a single qemu/hyperstart instance on the system
@@ -148,7 +147,7 @@ func (vm *vm) findSessionByToken(token Token) *ioSession {
 	return vm.tokenToSession[token]
 }
 
-func hyperstartTtyMessageToFrame(msg *hyperapi.TtyMessage, session *ioSession) *api.Frame {
+func hyperstartTtyMessageToFrame(msg *hyperstart.TtyMessage, session *ioSession) *api.Frame {
 	// Exit status
 	if session.terminated && len(msg.Message) == 1 {
 		return api.NewFrame(api.TypeNotification, int(api.NotificationProcessExited), msg.Message)
@@ -256,7 +255,7 @@ func (vm *vm) Connect() error {
 
 type relocationHandler func(*vm, *api.Hyper) error
 
-func relocateProcess(process *hyperapi.Process, session *ioSession) error {
+func relocateProcess(process *hyperstart.Process, session *ioSession) error {
 	// Make sure clients don't prefill process.Stdio and proces.Stderr
 	if process.Stdio != 0 {
 		return fmt.Errorf("expected process.Stdio to be 0, got %d", process.Stdio)
@@ -283,7 +282,7 @@ func execcmdHandler(vm *vm, hyper *api.Hyper) error {
 		return fmt.Errorf("expected 1 token, got %d", nTokens)
 	}
 
-	cmdIn := hyperapi.ExecCommand{}
+	cmdIn := hyperstart.ExecCommand{}
 	if err := json.Unmarshal(hyper.Data, &cmdIn); err != nil {
 		return err
 	}
@@ -314,7 +313,7 @@ func newcontainerHandler(vm *vm, hyper *api.Hyper) error {
 		return fmt.Errorf("expected 1 token, got %d", nTokens)
 	}
 
-	cmdIn := hyperapi.Container{}
+	cmdIn := hyperstart.Container{}
 	if err := json.Unmarshal(hyper.Data, &cmdIn); err != nil {
 		return err
 	}
@@ -393,7 +392,7 @@ func (session *ioSession) ForwardStdin(frame *api.Frame) error {
 	}
 
 	vm := session.vm
-	msg := &hyperapi.TtyMessage{
+	msg := &hyperstart.TtyMessage{
 		Session: session.ioBase,
 		Message: frame.Payload,
 	}
@@ -406,7 +405,7 @@ func (session *ioSession) ForwardStdin(frame *api.Frame) error {
 
 // windowSizeMessage07 is the hyperstart 0.7 winsize message payload for the
 // winsize command. This payload has changed in 0.8 so we can't use the
-// definition in the hyperapi package.
+// definition in the hyperstart package.
 type windowSizeMessage07 struct {
 	Seq    uint64 `json:"seq"`
 	Row    uint16 `json:"row"`
@@ -433,7 +432,7 @@ func (session *ioSession) SendTerminalSize(columns, rows int) error {
 
 // SendSignal
 func (session *ioSession) SendSignal(signal syscall.Signal) error {
-	msg := &hyperapi.KillCommand{
+	msg := &hyperstart.KillCommand{
 		Container: session.vm.containerID,
 		Signal:    signal,
 	}

@@ -25,11 +25,11 @@ import (
 
 	"github.com/clearcontainers/proxy/api"
 	goapi "github.com/clearcontainers/proxy/client"
-	"github.com/containers/virtcontainers/hyperstart/mock"
+	"github.com/containers/virtcontainers/pkg/hyperstart/mock"
 
 	"syscall"
 
-	hyperapi "github.com/hyperhq/runv/hyperstart/api/json"
+	"github.com/containers/virtcontainers/pkg/hyperstart"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -93,7 +93,7 @@ func (rig *testRig) Start() {
 	// Explicitly send READY message from hyperstart mock
 	rig.wg.Add(1)
 	go func() {
-		rig.Hyperstart.SendMessage(int(hyperapi.INIT_READY), []byte{})
+		rig.Hyperstart.SendMessage(int(hyperstart.ReadyCode), []byte{})
 		rig.wg.Done()
 	}()
 
@@ -264,7 +264,7 @@ func TestHyperPing(t *testing.T) {
 	assert.Equal(t, 1, len(msgs))
 
 	msg := msgs[0]
-	assert.Equal(t, hyperapi.INIT_PING, int(msg.Code))
+	assert.Equal(t, hyperstart.PingCode, int(msg.Code))
 	assert.Equal(t, 0, len(msg.Message))
 
 	rig.Stop()
@@ -282,7 +282,7 @@ func TestHyperStartpod(t *testing.T) {
 	// Send startopd and verify we have indeed received the message on the
 	// hyperstart side. startpod is interesting because it's a case of an
 	// hyper message with JSON data.
-	startpod := hyperapi.Pod{
+	startpod := hyperstart.Pod{
 		Hostname: "testhostname",
 		ShareDir: "rootfs",
 	}
@@ -293,8 +293,8 @@ func TestHyperStartpod(t *testing.T) {
 	assert.Equal(t, 1, len(msgs))
 
 	msg := msgs[0]
-	assert.Equal(t, hyperapi.INIT_STARTPOD, int(msg.Code))
-	received := hyperapi.Pod{}
+	assert.Equal(t, hyperstart.StartPodCode, int(msg.Code))
+	received := hyperstart.Pod{}
 	err = json.Unmarshal(msg.Message, &received)
 	assert.Nil(t, err)
 	assert.Equal(t, startpod.Hostname, received.Hostname)
@@ -404,9 +404,9 @@ func TestHyperSequenceNumberRelocation(t *testing.T) {
 	assert.Equal(t, 1, len(tokens))
 
 	// Send newcontainer hyper command
-	newcontainer := hyperapi.Container{
-		Id: testContainerID,
-		Process: &hyperapi.Process{
+	newcontainer := hyperstart.Container{
+		ID: testContainerID,
+		Process: &hyperstart.Process{
 			Args: []string{"/bin/sh"},
 		},
 	}
@@ -417,8 +417,8 @@ func TestHyperSequenceNumberRelocation(t *testing.T) {
 	msgs := rig.Hyperstart.GetLastMessages()
 	assert.Equal(t, 1, len(msgs))
 	msg := msgs[0]
-	assert.Equal(t, uint32(hyperapi.INIT_NEWCONTAINER), msg.Code)
-	payload := hyperapi.Container{}
+	assert.Equal(t, uint32(hyperstart.NewContainerCode), msg.Code)
+	payload := hyperstart.Container{}
 	err = json.Unmarshal(msg.Message, &payload)
 	assert.Nil(t, err)
 	assert.NotEqual(t, 0, payload.Process.Stdio)
@@ -574,7 +574,7 @@ func TestShimSignal(t *testing.T) {
 	shim.client.Kill(syscall.SIGUSR1)
 	msgs := rig.Hyperstart.GetLastMessages()
 	assert.Equal(t, 1, len(msgs))
-	decoded := hyperapi.KillCommand{}
+	decoded := hyperstart.KillCommand{}
 	err = json.Unmarshal(msgs[0].Message, &decoded)
 	assert.Nil(t, err)
 	assert.Equal(t, syscall.SIGUSR1, decoded.Signal)

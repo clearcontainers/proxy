@@ -253,7 +253,7 @@ func (vm *vm) Connect() error {
 	return nil
 }
 
-type relocationHandler func(*vm, *api.Hyper) error
+type relocationHandler func(*vm, *api.Hyper, *ioSession) error
 
 func relocateProcess(process *hyperstart.Process, session *ioSession) error {
 	// Make sure clients don't prefill process.Stdio and proces.Stderr
@@ -276,21 +276,10 @@ func relocateProcess(process *hyperstart.Process, session *ioSession) error {
 	return nil
 }
 
-func execcmdHandler(vm *vm, hyper *api.Hyper) error {
-	nTokens := len(hyper.Tokens)
-	if nTokens != 1 {
-		return fmt.Errorf("expected 1 token, got %d", nTokens)
-	}
-
+func execcmdHandler(vm *vm, hyper *api.Hyper, session *ioSession) error {
 	cmdIn := hyperstart.ExecCommand{}
 	if err := json.Unmarshal(hyper.Data, &cmdIn); err != nil {
 		return err
-	}
-
-	token := hyper.Tokens[0]
-	session := vm.findSessionByToken(Token(token))
-	if session == nil {
-		return fmt.Errorf("unknown token %s", token)
 	}
 
 	if err := relocateProcess(&cmdIn.Process, session); err != nil {
@@ -307,21 +296,10 @@ func execcmdHandler(vm *vm, hyper *api.Hyper) error {
 	return nil
 }
 
-func newcontainerHandler(vm *vm, hyper *api.Hyper) error {
-	nTokens := len(hyper.Tokens)
-	if nTokens != 1 {
-		return fmt.Errorf("expected 1 token, got %d", nTokens)
-	}
-
+func newcontainerHandler(vm *vm, hyper *api.Hyper, session *ioSession) error {
 	cmdIn := hyperstart.Container{}
 	if err := json.Unmarshal(hyper.Data, &cmdIn); err != nil {
 		return err
-	}
-
-	token := hyper.Tokens[0]
-	session := vm.findSessionByToken(Token(token))
-	if session == nil {
-		return fmt.Errorf("unknown token %s", token)
 	}
 
 	relocateProcess(cmdIn.Process, session)
@@ -349,9 +327,21 @@ func (vm *vm) relocateHyperCommand(hyper *api.Hyper) error {
 	}
 	needsRelocation := false
 
+	nTokens := len(hyper.Tokens)
+
 	for _, cmd := range cmds {
 		if hyper.HyperName == cmd.name {
-			if err := cmd.handler(vm, hyper); err != nil {
+			if nTokens != 1 {
+				return fmt.Errorf("expected 1 token, got %d", nTokens)
+			}
+
+			token := hyper.Tokens[0]
+			session := vm.findSessionByToken(Token(token))
+			if session == nil {
+				return fmt.Errorf("unknown token %s", token)
+			}
+
+			if err := cmd.handler(vm, hyper, session); err != nil {
 				return err
 			}
 			needsRelocation = true
@@ -361,10 +351,9 @@ func (vm *vm) relocateHyperCommand(hyper *api.Hyper) error {
 
 	// If a hyper command doesn't need a token but one is given anyway, reject the
 	// command.
-	numTokens := len(hyper.Tokens)
-	if !needsRelocation && numTokens > 0 {
+	if !needsRelocation && nTokens > 0 {
 		return fmt.Errorf("%s doesn't need tokens but %d token(s) were given",
-			hyper.HyperName, numTokens)
+			hyper.HyperName, nTokens)
 
 	}
 

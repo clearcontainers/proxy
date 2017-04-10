@@ -128,6 +128,9 @@ func TestHyperRelocationNewcontainer(t *testing.T) {
 	// 1 process can be spawned using execcmd.
 	cmd := rig.createNewcontainer(vm, 1)
 	token := cmd.Tokens[0]
+	// associate a dummy shim
+	vm.AssociateShim(Token(token), 1, nil)
+	// relocate
 	err := vm.relocateHyperCommand(cmd)
 	assert.Nil(t, err)
 
@@ -176,6 +179,9 @@ func TestHyperRelocationExeccmd(t *testing.T) {
 	// 1 process can be spawned using execcmd.
 	cmd := rig.createExecmd(vm, 1)
 	token := cmd.Tokens[0]
+	// associate a dummy shim
+	vm.AssociateShim(Token(token), 1, nil)
+	// relocate
 	err := vm.relocateHyperCommand(cmd)
 	assert.Nil(t, err)
 

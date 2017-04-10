@@ -23,6 +23,7 @@ import (
 	"os"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/clearcontainers/proxy/api"
 
@@ -80,6 +81,11 @@ type ioSession struct {
 
 	// socket connected to the fd sent over to the client
 	client net.Conn
+
+	// Channel to signal a shim has been associated with this session (hyper
+	// commands newcontainer and execcmd will wait for the shim to be ready
+	// before forwarding the command to hyperstart)
+	shimConnected chan interface{}
 }
 
 func newVM(id, ctlSerial, ioSerial string) *vm {
@@ -344,6 +350,13 @@ func (vm *vm) relocateHyperCommand(hyper *api.Hyper) error {
 			if err := cmd.handler(vm, hyper, session); err != nil {
 				return err
 			}
+
+			// Wait for the corresponding shim to be registered with the proxy so we can
+			// start forwarding data as soon as we receive it
+			if err := session.WaitForShim(); err != nil {
+				return err
+			}
+
 			needsRelocation = true
 			break
 		}
@@ -367,6 +380,24 @@ func (vm *vm) SendMessage(hyper *api.Hyper) error {
 
 	_, err := vm.hyperHandler.SendCtlMessage(hyper.HyperName, hyper.Data)
 	return err
+}
+
+var waitForShimTimeout = 30 * time.Second
+
+// WaitFormShim will wait until a shim claiming the ioSession has registered
+// itself with the proxy. If the shim has already done so, WaitForSim will
+// return immediatlely.
+func (session *ioSession) WaitForShim() error {
+	session.vm.infof(1, "session",
+		"waiting for shim to register itself with token %s (timeout %s)",
+		session.token, waitForShimTimeout)
+
+	select {
+	case <-session.shimConnected:
+	case <-time.After(waitForShimTimeout):
+		return fmt.Errorf("timeout waiting for shim with token %s", session.token)
+	}
+	return nil
 }
 
 // ForwardStdin forwards an api.Frame with stdin data to hyperstart
@@ -451,10 +482,11 @@ func (vm *vm) AllocateToken() (Token, error) {
 	}
 
 	session := &ioSession{
-		vm:       vm,
-		token:    token,
-		nStreams: nStreams,
-		ioBase:   ioBase,
+		vm:            vm,
+		token:         token,
+		nStreams:      nStreams,
+		ioBase:        ioBase,
+		shimConnected: make(chan interface{}),
 	}
 
 	// This mapping is to get the session from the seq number in an
@@ -484,6 +516,9 @@ func (vm *vm) AssociateShim(token Token, clientID uint64, clientConn net.Conn) (
 
 	session.clientID = clientID
 	session.client = clientConn
+
+	// Signal a runtime waiting that the shim is connected
+	close(session.shimConnected)
 
 	return session, nil
 }

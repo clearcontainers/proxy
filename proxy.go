@@ -113,8 +113,15 @@ func (c *client) infof(lvl glog.Level, fmt string, a ...interface{}) {
 }
 
 func (proxy *proxy) allocateTokens(vm *vm, numIOStreams int) (*api.IOResponse, error) {
+	url := url.URL{
+		Scheme: "unix",
+		Path:   proxy.socketPath,
+	}
+
 	if numIOStreams <= 0 {
-		return nil, nil
+		return &api.IOResponse{
+			URL: url.String(),
+		}, nil
 	}
 
 	tokens := make([]string, 0, numIOStreams)
@@ -131,11 +138,6 @@ func (proxy *proxy) allocateTokens(vm *vm, numIOStreams int) (*api.IOResponse, e
 			vm:    vm,
 		}
 		proxy.Unlock()
-	}
-
-	url := url.URL{
-		Scheme: "unix",
-		Path:   proxy.socketPath,
 	}
 
 	return &api.IOResponse{

@@ -156,7 +156,6 @@ func TestRegisterVM(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, ret)
 	// We haven't asked for I/O tokens
-	assert.Equal(t, "", ret.IO.URL)
 	assert.Equal(t, 0, len(ret.IO.Tokens))
 
 	// A new RegisterVM message with the same containerID should error out.
@@ -234,7 +233,6 @@ func TestAttachVM(t *testing.T) {
 	ret, err := rig.Client.AttachVM(testContainerID, nil)
 	assert.Nil(t, err)
 	// We haven't asked for I/O tokens
-	assert.Equal(t, "", ret.IO.URL)
 	assert.Equal(t, 0, len(ret.IO.Tokens))
 
 	err = rig.Client.UnregisterVM(testContainerID)

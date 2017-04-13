@@ -143,17 +143,36 @@ func TestHyperRelocationNewcontainer(t *testing.T) {
 	assert.Equal(t, session.ioBase, cmdOut.Process.Stdio)
 	assert.Equal(t, session.ioBase+1, cmdOut.Process.Stderr)
 
-	// Giving other fewer or more tokens than 1 should result in an error
-	cmd = rig.createNewcontainer(vm, 0)
-	err = vm.relocateHyperCommand(cmd)
-	assert.NotNil(t, err)
-
-	cmd = rig.createNewcontainer(vm, 2)
+	// Giving more than 1 token should result in an error
+	cmd = rig.createExecmd(vm, 2)
 	err = vm.relocateHyperCommand(cmd)
 	assert.NotNil(t, err)
 
 	rig.Stop()
 
+	vm.Close()
+}
+
+// In some case, we want to create containers without caring about the session
+// between the process inside the VM and the host. One of those cases is the
+// pause container created as we create a pod in virtcontainers.
+func TestHyperRelocationNewcontainerNoToken(t *testing.T) {
+	rig := newVMRig(t)
+	rig.Start()
+
+	vm := rig.CreateVM()
+
+	// Relocate an execcmd command, no token given!
+	cmd := rig.createNewcontainer(vm, 0)
+
+	// don't associate a dummy shim, we should wait for one when no token is
+	// given.
+
+	// relocate
+	err := vm.relocateHyperCommand(cmd)
+	assert.Nil(t, err)
+
+	rig.Stop()
 	vm.Close()
 }
 
@@ -194,11 +213,7 @@ func TestHyperRelocationExeccmd(t *testing.T) {
 	assert.Equal(t, session.ioBase, cmdOut.Process.Stdio)
 	assert.Equal(t, session.ioBase+1, cmdOut.Process.Stderr)
 
-	// Giving other fewer or more tokens than 1 should result in an error
-	cmd = rig.createExecmd(vm, 0)
-	err = vm.relocateHyperCommand(cmd)
-	assert.NotNil(t, err)
-
+	// Giving more than 1 token should result in an error
 	cmd = rig.createExecmd(vm, 2)
 	err = vm.relocateHyperCommand(cmd)
 	assert.NotNil(t, err)

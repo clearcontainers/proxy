@@ -337,8 +337,14 @@ func (vm *vm) relocateHyperCommand(hyper *api.Hyper) error {
 
 	for _, cmd := range cmds {
 		if hyper.HyperName == cmd.name {
-			if nTokens != 1 {
-				return fmt.Errorf("expected 1 token, got %d", nTokens)
+			if nTokens > 1 {
+				return fmt.Errorf("expected 0 or 1 token, got %d", nTokens)
+			}
+
+			// We don't need a token to start a process inside the VM, but we
+			// don't get a session in that case.
+			if nTokens == 0 {
+				continue
 			}
 
 			token := hyper.Tokens[0]

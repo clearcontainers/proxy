@@ -172,6 +172,15 @@ func TestHyperRelocationNewcontainerNoToken(t *testing.T) {
 	err := vm.relocateHyperCommand(cmd)
 	assert.Nil(t, err)
 
+	// Check that the relocated command contains the seq numbers
+	// of the null session
+	session := &vm.nullSession
+	cmdOut := hyperstart.ExecCommand{}
+	err = json.Unmarshal(cmd.Data, &cmdOut)
+	assert.Nil(t, err)
+	assert.Equal(t, session.ioBase, cmdOut.Process.Stdio)
+	assert.Equal(t, session.ioBase+1, cmdOut.Process.Stderr)
+
 	rig.Stop()
 	vm.Close()
 }

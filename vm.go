@@ -56,6 +56,11 @@ type vm struct {
 	// tokenToSession associate a token to the correspoding ioSession
 	tokenToSession map[Token]*ioSession
 
+	// nullSession is a special I/O session used for containers and execmd processes
+	// when client of the proxy indicates they don't care about communicating with the
+	// process inside the VM.
+	nullSession ioSession
+
 	// Used to wait for all VM-global goroutines to finish on Close()
 	wg sync.WaitGroup
 
@@ -88,17 +93,36 @@ type ioSession struct {
 	shimConnected chan interface{}
 }
 
+const (
+	nullSessionStdout = 1 + iota
+	nullSessionStderr
+	firstIoBase
+)
+
 func newVM(id, ctlSerial, ioSerial string) *vm {
 	h := hyperstart.NewHyperstart(ctlSerial, ioSerial, "unix")
 
-	return &vm{
+	vm := &vm{
 		containerID:    id,
 		hyperHandler:   h,
-		nextIoBase:     1,
+		nextIoBase:     firstIoBase,
 		ioSessions:     make(map[uint64]*ioSession),
 		tokenToSession: make(map[Token]*ioSession),
 		vmLost:         make(chan interface{}),
 	}
+
+	vm.nullSession = ioSession{
+		vm:            vm,
+		nStreams:      2,
+		ioBase:        nullSessionStdout,
+		shimConnected: make(chan interface{}),
+	}
+	vm.ioSessions[nullSessionStdout] = &vm.nullSession
+	vm.ioSessions[nullSessionStderr] = &vm.nullSession
+	// Null sessions are always ready, there won't be a shim to wait for
+	close(vm.nullSession.shimConnected)
+
+	return vm
 }
 
 // setConsole() will make the proxy output the console data on stderr
@@ -185,6 +209,13 @@ func (vm *vm) ioHyperToClients() {
 		if session == nil {
 			fmt.Fprintf(os.Stderr,
 				"couldn't find client with seq number %d\n", msg.Session)
+			continue
+		}
+
+		// The nullSession acts like /dev/null, discard data associated with it
+		if session == &vm.nullSession {
+			vm.info(1, "io", "data received for the null session, discarding")
+			vm.dump(2, msg.Message)
 			continue
 		}
 
@@ -341,16 +372,17 @@ func (vm *vm) relocateHyperCommand(hyper *api.Hyper) error {
 				return fmt.Errorf("expected 0 or 1 token, got %d", nTokens)
 			}
 
-			// We don't need a token to start a process inside the VM, but we
-			// don't get a session in that case.
+			var session *ioSession
 			if nTokens == 0 {
-				continue
-			}
-
-			token := hyper.Tokens[0]
-			session := vm.findSessionByToken(Token(token))
-			if session == nil {
-				return fmt.Errorf("unknown token %s", token)
+				// When not given any token, we use the nullSession and will discard data
+				// received from hyper
+				session = &vm.nullSession
+			} else {
+				token := hyper.Tokens[0]
+				session = vm.findSessionByToken(Token(token))
+				if session == nil {
+					return fmt.Errorf("unknown token %s", token)
+				}
 			}
 
 			if err := cmd.handler(vm, hyper, session); err != nil {

@@ -23,7 +23,7 @@ import (
 	"strconv"
 	"strings"
 
-	log "github.com/Sirupsen/logrus"
+	"github.com/Sirupsen/logrus"
 	vc "github.com/containers/virtcontainers"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
 )
@@ -49,7 +49,17 @@ type RuntimeConfig struct {
 	ProxyType   vc.ProxyType
 	ProxyConfig interface{}
 
+	ShimType   vc.ShimType
+	ShimConfig interface{}
+
 	Console string
+}
+
+var ociLog = logrus.New()
+
+// SetLog sets the logger for oci package.
+func SetLog(logger *logrus.Logger) {
+	ociLog = logger
 }
 
 func cmdEnvs(spec spec.Spec, envs []vc.EnvVar) []vc.EnvVar {
@@ -132,7 +142,7 @@ func networkConfig(ocispec spec.Spec) (vc.NetworkConfig, error) {
 // to a virtcontainers pod configuration structure.
 func PodConfig(runtime RuntimeConfig, bundlePath, cid, console string) (*vc.PodConfig, *spec.Spec, error) {
 	configPath := filepath.Join(bundlePath, "config.json")
-	log.Debugf("converting %s", configPath)
+	ociLog.Debugf("converting %s", configPath)
 
 	configByte, err := ioutil.ReadFile(configPath)
 	if err != nil {
@@ -144,23 +154,26 @@ func PodConfig(runtime RuntimeConfig, bundlePath, cid, console string) (*vc.PodC
 		return nil, nil, err
 	}
 
-	rootfs := filepath.Join(bundlePath, ocispec.Root.Path)
-	log.Debugf("container rootfs: %s", rootfs)
+	rootfs := ocispec.Root.Path
+	if !filepath.IsAbs(rootfs) {
+		rootfs = filepath.Join(bundlePath, ocispec.Root.Path)
+	}
+	ociLog.Debugf("container rootfs: %s", rootfs)
 
 	cmd := vc.Cmd{
-		Args:    ocispec.Process.Args,
-		Envs:    cmdEnvs(ocispec, []vc.EnvVar{}),
-		WorkDir: ocispec.Process.Cwd,
-		User:    strconv.FormatUint(uint64(ocispec.Process.User.UID), 10),
-		Group:   strconv.FormatUint(uint64(ocispec.Process.User.GID), 10),
+		Args:        ocispec.Process.Args,
+		Envs:        cmdEnvs(ocispec, []vc.EnvVar{}),
+		WorkDir:     ocispec.Process.Cwd,
+		User:        strconv.FormatUint(uint64(ocispec.Process.User.UID), 10),
+		Group:       strconv.FormatUint(uint64(ocispec.Process.User.GID), 10),
+		Interactive: ocispec.Process.Terminal,
+		Console:     console,
 	}
 
 	containerConfig := vc.ContainerConfig{
-		ID:          cid,
-		RootFs:      ocispec.Root.Path,
-		Interactive: ocispec.Process.Terminal,
-		Console:     console,
-		Cmd:         cmd,
+		ID:     cid,
+		RootFs: rootfs,
+		Cmd:    cmd,
 	}
 
 	networkConfig, err := networkConfig(ocispec)
@@ -184,12 +197,13 @@ func PodConfig(runtime RuntimeConfig, bundlePath, cid, console string) (*vc.PodC
 		ProxyType:   runtime.ProxyType,
 		ProxyConfig: runtime.ProxyConfig,
 
+		ShimType:   runtime.ShimType,
+		ShimConfig: runtime.ShimConfig,
+
 		NetworkModel:  vc.CNMNetworkModel,
 		NetworkConfig: networkConfig,
 
 		Containers: []vc.ContainerConfig{containerConfig},
-
-		Console: runtime.Console,
 
 		Annotations: map[string]string{ociConfigPathKey: configPath},
 	}

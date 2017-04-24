@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
@@ -27,7 +28,6 @@ import (
 
 	ciaoQemu "github.com/01org/ciao/qemu"
 	"github.com/01org/ciao/ssntp/uuid"
-	log "github.com/Sirupsen/logrus"
 )
 
 type qmpChannel struct {
@@ -84,15 +84,15 @@ func (l qmpLogger) V(level int32) bool {
 }
 
 func (l qmpLogger) Infof(format string, v ...interface{}) {
-	log.Infof(format, v...)
+	virtLog.Infof(format, v...)
 }
 
 func (l qmpLogger) Warningf(format string, v ...interface{}) {
-	log.Warnf(format, v...)
+	virtLog.Warnf(format, v...)
 }
 
 func (l qmpLogger) Errorf(format string, v ...interface{}) {
-	log.Errorf(format, v...)
+	virtLog.Errorf(format, v...)
 }
 
 var kernelDefaultParams = []Param{
@@ -118,6 +118,7 @@ var kernelDefaultParams = []Param{
 	{"systemd.mask", "systemd-networkd.service"},
 	{"systemd.mask", "systemd-networkd.socket"},
 	{"cryptomgr.notests", ""},
+	{"net.ifnames", "0"},
 }
 
 // kernelDefaultParamsNonDebug is a list of the default kernel
@@ -249,45 +250,15 @@ func (q *qemu) appendConsoles(devices []ciaoQemu.Device, podConfig PodConfig) []
 
 	var console ciaoQemu.CharDevice
 
-	offset := 0
-	if podConfig.Console != "" {
-		console = ciaoQemu.CharDevice{
-			Driver:   ciaoQemu.Console,
-			Backend:  ciaoQemu.Socket,
-			DeviceID: "console0",
-			ID:       "charconsole0",
-			Path:     podConfig.Console,
-		}
-
-		devices = append(devices, console)
-
-		offset++
+	console = ciaoQemu.CharDevice{
+		Driver:   ciaoQemu.Console,
+		Backend:  ciaoQemu.Socket,
+		DeviceID: "console0",
+		ID:       "charconsole0",
+		Path:     q.getPodConsole(podConfig.ID),
 	}
 
-	for i, c := range podConfig.Containers {
-		// Need to add an offset because of the console created for the pod.
-		idx := i + offset
-
-		if c.Interactive == false || c.Console == "" {
-			console = ciaoQemu.CharDevice{
-				Driver:   ciaoQemu.Console,
-				Backend:  ciaoQemu.Socket,
-				DeviceID: fmt.Sprintf("console%d", idx),
-				ID:       fmt.Sprintf("charconsole%d", idx),
-				Path:     fmt.Sprintf("%s/%s/%s/%s", runStoragePath, podConfig.ID, c.ID, defaultConsole),
-			}
-		} else {
-			console = ciaoQemu.CharDevice{
-				Driver:   ciaoQemu.Console,
-				Backend:  ciaoQemu.Serial,
-				DeviceID: fmt.Sprintf("console%d", idx),
-				ID:       fmt.Sprintf("charconsole%d", idx),
-				Path:     c.Console,
-			}
-		}
-
-		devices = append(devices, console)
-	}
+	devices = append(devices, console)
 
 	return devices
 }
@@ -372,18 +343,18 @@ func (q *qemu) qmpMonitor(connectedCh chan struct{}) {
 	cfg := ciaoQemu.QMPConfig{Logger: qmpLogger{}}
 	qmp, ver, err := ciaoQemu.QMPStart(q.qmpMonitorCh.ctx, q.qmpMonitorCh.path, cfg, q.qmpMonitorCh.disconnectCh)
 	if err != nil {
-		log.Errorf("Failed to connect to QEMU instance %v", err)
+		virtLog.Errorf("Failed to connect to QEMU instance %v", err)
 		return
 	}
 
 	q.qmpMonitorCh.qmp = qmp
 
-	log.Infof("QMP version %d.%d.%d", ver.Major, ver.Minor, ver.Micro)
-	log.Infof("QMP capabilities %s", ver.Capabilities)
+	virtLog.Infof("QMP version %d.%d.%d", ver.Major, ver.Minor, ver.Micro)
+	virtLog.Infof("QMP capabilities %s", ver.Capabilities)
 
 	err = q.qmpMonitorCh.qmp.ExecuteQMPCapabilities(q.qmpMonitorCh.ctx)
 	if err != nil {
-		log.Errorf("Unable to send qmp_capabilities command: %v", err)
+		virtLog.Errorf("Unable to send qmp_capabilities command: %v", err)
 		return
 	}
 
@@ -531,13 +502,13 @@ func (q *qemu) stopPod() error {
 
 	qmp, _, err := ciaoQemu.QMPStart(q.qmpControlCh.ctx, q.qmpControlCh.path, cfg, q.qmpControlCh.disconnectCh)
 	if err != nil {
-		log.Errorf("Failed to connect to QEMU instance %v", err)
+		virtLog.Errorf("Failed to connect to QEMU instance %v", err)
 		return err
 	}
 
 	err = qmp.ExecuteQMPCapabilities(q.qmpMonitorCh.ctx)
 	if err != nil {
-		log.Errorf("Failed to negotiate capabilities with QEMU %v", err)
+		virtLog.Errorf("Failed to negotiate capabilities with QEMU %v", err)
 		return err
 	}
 
@@ -561,4 +532,10 @@ func (q *qemu) addDevice(devInfo interface{}, devType deviceType) error {
 	}
 
 	return nil
+}
+
+// getPodConsole builds the path of the console where we can read
+// logs coming from the pod.
+func (q *qemu) getPodConsole(podID string) string {
+	return filepath.Join(runStoragePath, podID, defaultConsole)
 }

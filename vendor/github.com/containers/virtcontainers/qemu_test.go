@@ -19,6 +19,7 @@ package virtcontainers
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -54,7 +55,7 @@ func testQemuBuildKernelParams(t *testing.T, kernelParams []Param, expected stri
 	}
 }
 
-var testQemuKernelParamsBase = "root=/dev/pmem0p1 rootflags=dax,data=ordered,errors=remount-ro rw rootfstype=ext4 tsc=reliable no_timer_check rcupdate.rcu_expedited=1 i8042.direct=1 i8042.dumbkbd=1 i8042.nopnp=1 i8042.noaux=1 noreplace-smp reboot=k panic=1 console=hvc0 console=hvc1 initcall_debug init=/usr/lib/systemd/systemd systemd.unit=cc-agent.target iommu=off systemd.mask=systemd-networkd.service systemd.mask=systemd-networkd.socket cryptomgr.notests"
+var testQemuKernelParamsBase = "root=/dev/pmem0p1 rootflags=dax,data=ordered,errors=remount-ro rw rootfstype=ext4 tsc=reliable no_timer_check rcupdate.rcu_expedited=1 i8042.direct=1 i8042.dumbkbd=1 i8042.nopnp=1 i8042.noaux=1 noreplace-smp reboot=k panic=1 console=hvc0 console=hvc1 initcall_debug init=/usr/lib/systemd/systemd systemd.unit=cc-agent.target iommu=off systemd.mask=systemd-networkd.service systemd.mask=systemd-networkd.socket cryptomgr.notests net.ifnames=0"
 var testQemuKernelParamsNonDebug = "quiet systemd.show_status=false"
 var testQemuKernelParamsDebug = "debug systemd.show_status=true systemd.log_level=debug"
 
@@ -243,10 +244,6 @@ func TestQemuAppendFSDevices(t *testing.T) {
 
 func TestQemuAppendConsoles(t *testing.T) {
 	podID := "testPodID"
-	cID1 := "100"
-	cID2 := "200"
-	podConsolePath := "testPodConsolePath"
-	contConsolePath := "testContConsolePath"
 
 	expectedOut := []ciaoQemu.Device{
 		ciaoQemu.SerialDevice{
@@ -258,41 +255,13 @@ func TestQemuAppendConsoles(t *testing.T) {
 			Backend:  ciaoQemu.Socket,
 			DeviceID: "console0",
 			ID:       "charconsole0",
-			Path:     podConsolePath,
-		},
-		ciaoQemu.CharDevice{
-			Driver:   ciaoQemu.Console,
-			Backend:  ciaoQemu.Serial,
-			DeviceID: "console1",
-			ID:       "charconsole1",
-			Path:     contConsolePath,
-		},
-		ciaoQemu.CharDevice{
-			Driver:   ciaoQemu.Console,
-			Backend:  ciaoQemu.Socket,
-			DeviceID: "console2",
-			ID:       "charconsole2",
-			Path:     fmt.Sprintf("%s/%s/%s/%s", runStoragePath, podID, cID2, defaultConsole),
-		},
-	}
-
-	containers := []ContainerConfig{
-		{
-			ID:          cID1,
-			Interactive: true,
-			Console:     contConsolePath,
-		},
-		{
-			ID:          cID2,
-			Interactive: false,
-			Console:     "",
+			Path:     filepath.Join(runStoragePath, podID, defaultConsole),
 		},
 	}
 
 	podConfig := PodConfig{
 		ID:         podID,
-		Containers: containers,
-		Console:    podConsolePath,
+		Containers: []ContainerConfig{},
 	}
 
 	testQemuAppend(t, podConfig, expectedOut, consoleDev)
@@ -479,4 +448,14 @@ func TestQemuAddDeviceSerialPordDev(t *testing.T) {
 	}
 
 	testQemuAddDevice(t, socket, serialPortDev, expectedOut)
+}
+
+func TestQemuGetPodConsole(t *testing.T) {
+	q := &qemu{}
+	podID := "testPodID"
+	expected := filepath.Join(runStoragePath, podID, defaultConsole)
+
+	if result := q.getPodConsole(podID); result != expected {
+		t.Fatalf("Got %s\nExpecting %s", result, expected)
+	}
 }

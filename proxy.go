@@ -388,7 +388,7 @@ func disconnectShim(data []byte, userData interface{}, response *handlerResponse
 	client.session = nil
 	client.token = ""
 
-	client.infof(1, "DisonnectShim()")
+	client.infof(1, "DisconnectShim()")
 }
 
 // "signal"
@@ -588,7 +588,7 @@ func proxyMain() {
 
 	// Wait for all the goroutines started by registerVMHandler to finish.
 	//
-	// Not stricly necessary as:
+	// Not strictly necessary as:
 	//   • currently proxy.serve() cannot return,
 	//   • even if it was, the process is about to exit anyway...
 	//

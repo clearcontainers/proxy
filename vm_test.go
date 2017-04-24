@@ -124,7 +124,7 @@ func TestHyperRelocationNewcontainer(t *testing.T) {
 
 	vm := rig.CreateVM()
 
-	// Relocate an execcmd command, giving 1 token as it should be (onky
+	// Relocate an execcmd command, giving 1 token as it should be (only
 	// 1 process can be spawned using execcmd.
 	cmd := rig.createNewcontainer(vm, 1)
 	token := cmd.Tokens[0]
@@ -203,7 +203,7 @@ func TestHyperRelocationExeccmd(t *testing.T) {
 
 	vm := rig.CreateVM()
 
-	// Relocate an execcmd command, giving 1 token as it should be (onky
+	// Relocate an execcmd command, giving 1 token as it should be (only
 	// 1 process can be spawned using execcmd.
 	cmd := rig.createExecmd(vm, 1)
 	token := cmd.Tokens[0]
@@ -240,7 +240,7 @@ func TestHyperRelocationPing(t *testing.T) {
 
 	vm := rig.CreateVM()
 
-	// Relocate a ping command, giving 1 token as it should be (onky
+	// Relocate a ping command, giving 1 token as it should be (only
 	// 1 process can be spawned using execcmd.
 	cmd := rig.createHyperCmd(vm, "ping", 1, nil)
 	originalCmd := *cmd

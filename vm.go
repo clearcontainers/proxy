@@ -53,7 +53,7 @@ type vm struct {
 	// numbers appear in this map.
 	ioSessions map[uint64]*ioSession
 
-	// tokenToSession associate a token to the correspoding ioSession
+	// tokenToSession associate a token to the corresponding ioSession
 	tokenToSession map[Token]*ioSession
 
 	// nullSession is a special I/O session used for containers and execmd processes
@@ -424,7 +424,7 @@ var waitForShimTimeout = 30 * time.Second
 
 // WaitFormShim will wait until a shim claiming the ioSession has registered
 // itself with the proxy. If the shim has already done so, WaitForSim will
-// return immediatlely.
+// return immediately.
 func (session *ioSession) WaitForShim() error {
 	session.vm.infof(1, "session",
 		"waiting for shim to register itself with token %s (timeout %s)",
@@ -539,7 +539,7 @@ func (vm *vm) AllocateToken() (Token, error) {
 	return token, nil
 }
 
-// AssociateShim associates a shim given by the triplet (token, cliendID,
+// AssociateShim associates a shim given by the triplet (token, clientID,
 // clientConn) to a vm (POD). After associating the shim, a hyper command can
 // be issued to start the process inside the VM and data can flow between shim
 // and containerized process through the shim.

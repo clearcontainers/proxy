@@ -17,26 +17,42 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/user"
 	"strings"
 	"text/tabwriter"
 
-	log "github.com/Sirupsen/logrus"
+	"github.com/01org/ciao/ssntp/uuid"
+	"github.com/Sirupsen/logrus"
 	"github.com/urfave/cli"
 
 	vc "github.com/containers/virtcontainers"
 )
 
+var virtcLog = logrus.New()
+
 var listFormat = "%s\t%s\t%s\t%s\n"
 var statusFormat = "%s\t%s\n"
+
+var (
+	errNeedContainerID = errors.New("Container ID cannot be empty")
+	errNeedPodID       = errors.New("Pod ID cannot be empty")
+)
 
 var podConfigFlags = []cli.Flag{
 	cli.GenericFlag{
 		Name:  "agent",
 		Value: new(vc.AgentType),
 		Usage: "the guest agent",
+	},
+
+	cli.StringFlag{
+		Name:  "id",
+		Value: "",
+		Usage: "the pod identifier (default: auto-generated)",
 	},
 
 	cli.GenericFlag{
@@ -57,10 +73,22 @@ var podConfigFlags = []cli.Flag{
 		Usage: "the agent's proxy",
 	},
 
+	cli.GenericFlag{
+		Name:  "shim",
+		Value: new(vc.ShimType),
+		Usage: "the shim type",
+	},
+
 	cli.StringFlag{
 		Name:  "proxy-url",
 		Value: "",
 		Usage: "the agent's proxy socket path",
+	},
+
+	cli.StringFlag{
+		Name:  "shim-path",
+		Value: "",
+		Usage: "the shim binary path",
 	},
 
 	cli.StringFlag{
@@ -132,7 +160,6 @@ var podConfigFlags = []cli.Flag{
 
 func buildPodConfig(context *cli.Context) (vc.PodConfig, error) {
 	var agConfig interface{}
-	var proxyConfig interface{}
 
 	sshdUser := context.String("sshd-user")
 	sshdServer := context.String("sshd-server")
@@ -142,6 +169,7 @@ func buildPodConfig(context *cli.Context) (vc.PodConfig, error) {
 	hyperTtySockName := context.String("hyper-tty-sock-name")
 	hyperPauseBinPath := context.String("pause-path")
 	proxyURL := context.String("proxy-url")
+	shimPath := context.String("shim-path")
 	vmVCPUs := context.Uint("vm-vcpus")
 	vmMemory := context.Uint("vm-memory")
 	agentType, ok := context.Generic("agent").(*vc.AgentType)
@@ -162,6 +190,11 @@ func buildPodConfig(context *cli.Context) (vc.PodConfig, error) {
 	proxyType, ok := context.Generic("proxy").(*vc.ProxyType)
 	if ok != true {
 		return vc.PodConfig{}, fmt.Errorf("Could not convert proxy type")
+	}
+
+	shimType, ok := context.Generic("shim").(*vc.ShimType)
+	if ok != true {
+		return vc.PodConfig{}, fmt.Errorf("Could not convert shim type")
 	}
 
 	volumes, ok := context.Generic("volume").(*vc.Volumes)
@@ -211,22 +244,23 @@ func buildPodConfig(context *cli.Context) (vc.PodConfig, error) {
 		agConfig = nil
 	}
 
-	switch *proxyType {
-	case vc.CCProxyType:
-		proxyConfig = vc.CCProxyConfig{
-			URL: proxyURL,
-		}
+	proxyConfig := getProxyConfig(*proxyType, proxyURL)
 
-	default:
-		proxyConfig = nil
-	}
+	shimConfig := getShimConfig(*shimType, shimPath)
 
 	vmConfig := vc.Resources{
 		VCPUs:  vmVCPUs,
 		Memory: vmMemory,
 	}
 
+	id := context.String("id")
+	if id == "" {
+		// auto-generate pod name
+		id = uuid.Generate().String()
+	}
+
 	podConfig := vc.PodConfig{
+		ID:       id,
 		VMConfig: vmConfig,
 
 		HypervisorType:   vc.QemuHypervisor,
@@ -241,12 +275,45 @@ func buildPodConfig(context *cli.Context) (vc.PodConfig, error) {
 		ProxyType:   *proxyType,
 		ProxyConfig: proxyConfig,
 
-		Containers: []vc.ContainerConfig{},
+		ShimType:   *shimType,
+		ShimConfig: shimConfig,
 
-		Console: "/tmp/virtcontainers/console.sock",
+		Containers: []vc.ContainerConfig{},
 	}
 
 	return podConfig, nil
+}
+
+func getProxyConfig(proxyType vc.ProxyType, url string) interface{} {
+	var proxyConfig interface{}
+
+	switch proxyType {
+	case vc.CCProxyType:
+		proxyConfig = vc.CCProxyConfig{
+			URL: url,
+		}
+
+	default:
+		proxyConfig = nil
+	}
+
+	return proxyConfig
+}
+
+func getShimConfig(shimType vc.ShimType, path string) interface{} {
+	var shimConfig interface{}
+
+	switch shimType {
+	case vc.CCShimType:
+		shimConfig = vc.CCShimConfig{
+			Path: path,
+		}
+
+	default:
+		shimConfig = nil
+	}
+
+	return shimConfig
 }
 
 // checkRequiredPodArgs checks to ensure the required command-line
@@ -272,7 +339,7 @@ func checkRequiredPodArgs(context *cli.Context) error {
 
 	id := context.String("id")
 	if id == "" {
-		return vc.ErrNeedPodID
+		return errNeedPodID
 	}
 
 	return nil
@@ -291,7 +358,7 @@ func checkRequiredContainerArgs(context *cli.Context) error {
 
 	podID := context.String("pod-id")
 	if podID == "" {
-		return vc.ErrNeedPodID
+		return errNeedPodID
 	}
 
 	rootfs := context.String("rootfs")
@@ -301,7 +368,7 @@ func checkRequiredContainerArgs(context *cli.Context) error {
 
 	id := context.String("id")
 	if id == "" {
-		return vc.ErrNeedContainerID
+		return errNeedContainerID
 	}
 
 	return nil
@@ -332,7 +399,7 @@ func createPod(context *cli.Context) error {
 		return fmt.Errorf("Could not create pod: %s", err)
 	}
 
-	fmt.Printf("Created pod %s\n", p.ID())
+	fmt.Printf("Pod %s created\n", p.ID())
 
 	return nil
 }
@@ -354,28 +421,34 @@ func checkContainerArgs(context *cli.Context, f func(context *cli.Context) error
 }
 
 func deletePod(context *cli.Context) error {
-	_, err := vc.DeletePod(context.String("id"))
+	p, err := vc.DeletePod(context.String("id"))
 	if err != nil {
 		return fmt.Errorf("Could not delete pod: %s", err)
 	}
+
+	fmt.Printf("Pod %s deleted\n", p.ID())
 
 	return nil
 }
 
 func startPod(context *cli.Context) error {
-	_, err := vc.StartPod(context.String("id"))
+	p, err := vc.StartPod(context.String("id"))
 	if err != nil {
 		return fmt.Errorf("Could not start pod: %s", err)
 	}
+
+	fmt.Printf("Pod %s started\n", p.ID())
 
 	return nil
 }
 
 func stopPod(context *cli.Context) error {
-	_, err := vc.StopPod(context.String("id"))
+	p, err := vc.StopPod(context.String("id"))
 	if err != nil {
 		return fmt.Errorf("Could not stop pod: %s", err)
 	}
+
+	fmt.Printf("Pod %s stopped\n", p.ID())
 
 	return nil
 }
@@ -511,6 +584,11 @@ var statusPodCommand = cli.Command{
 func createContainer(context *cli.Context) error {
 	console := context.String("console")
 
+	interactive := false
+	if console != "" {
+		interactive = true
+	}
+
 	envs := []vc.EnvVar{
 		{
 			Var:   "PATH",
@@ -519,22 +597,23 @@ func createContainer(context *cli.Context) error {
 	}
 
 	cmd := vc.Cmd{
-		Args:    strings.Split(context.String("cmd"), " "),
-		Envs:    envs,
-		WorkDir: "/",
+		Args:        strings.Split(context.String("cmd"), " "),
+		Envs:        envs,
+		WorkDir:     "/",
+		Interactive: interactive,
+		Console:     console,
 	}
 
-	interactive := false
-	if console != "" {
-		interactive = true
+	id := context.String("id")
+	if id == "" {
+		// auto-generate container name
+		id = uuid.Generate().String()
 	}
 
 	containerConfig := vc.ContainerConfig{
-		ID:          context.String("id"),
-		RootFs:      context.String("rootfs"),
-		Interactive: interactive,
-		Console:     console,
-		Cmd:         cmd,
+		ID:     id,
+		RootFs: context.String("rootfs"),
+		Cmd:    cmd,
 	}
 
 	_, c, err := vc.CreateContainer(context.String("pod-id"), containerConfig)
@@ -542,7 +621,7 @@ func createContainer(context *cli.Context) error {
 		return fmt.Errorf("Could not create container: %s", err)
 	}
 
-	fmt.Printf("Created container %s\n", c.ID())
+	fmt.Printf("Container %s created\n", c.ID())
 
 	return nil
 }
@@ -581,6 +660,13 @@ func stopContainer(context *cli.Context) error {
 }
 
 func enterContainer(context *cli.Context) error {
+	console := context.String("console")
+
+	interactive := false
+	if console != "" {
+		interactive = true
+	}
+
 	envs := []vc.EnvVar{
 		{
 			Var:   "PATH",
@@ -589,9 +675,11 @@ func enterContainer(context *cli.Context) error {
 	}
 
 	cmd := vc.Cmd{
-		Args:    strings.Split(context.String("cmd"), " "),
-		Envs:    envs,
-		WorkDir: "/",
+		Args:        strings.Split(context.String("cmd"), " "),
+		Envs:        envs,
+		WorkDir:     "/",
+		Interactive: interactive,
+		Console:     console,
 	}
 
 	_, c, _, err := vc.EnterContainer(context.String("pod-id"), context.String("id"), cmd)
@@ -626,7 +714,7 @@ var createContainerCommand = cli.Command{
 		cli.StringFlag{
 			Name:  "id",
 			Value: "",
-			Usage: "the container identifier",
+			Usage: "the container identifier (default: auto-generated)",
 		},
 		cli.StringFlag{
 			Name:  "pod-id",
@@ -733,6 +821,11 @@ var enterContainerCommand = cli.Command{
 			Value: "echo",
 			Usage: "the command executed inside the container",
 		},
+		cli.StringFlag{
+			Name:  "console",
+			Value: "",
+			Usage: "the process console",
+		},
 	},
 	Action: func(context *cli.Context) error {
 		return checkContainerArgs(context, enterContainer)
@@ -759,6 +852,32 @@ var statusContainerCommand = cli.Command{
 	},
 }
 
+func startCCShim(process *vc.Process, shimPath, url string) error {
+	if process.Token == "" {
+		return fmt.Errorf("Token cannot be empty")
+	}
+
+	if url == "" {
+		return fmt.Errorf("URL cannot be empty")
+	}
+
+	if shimPath == "" {
+		return fmt.Errorf("Shim path cannot be empty")
+	}
+
+	cmd := exec.Command(shimPath, "-t", process.Token, "-u", url)
+	cmd.Env = os.Environ()
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func main() {
 	cli.VersionFlag = cli.BoolFlag{
 		Name:  "version",
@@ -768,6 +887,23 @@ func main() {
 	virtc := cli.NewApp()
 	virtc.Name = "VirtContainers CLI"
 	virtc.Version = "0.0.1"
+
+	virtc.Flags = []cli.Flag{
+		cli.BoolFlag{
+			Name:  "debug",
+			Usage: "enable debug output for logging",
+		},
+		cli.StringFlag{
+			Name:  "log",
+			Value: "",
+			Usage: "set the log file path where internal debug information is written",
+		},
+		cli.StringFlag{
+			Name:  "log-format",
+			Value: "text",
+			Usage: "set the format used by logs ('text' (default), or 'json')",
+		},
+	}
 
 	virtc.Commands = []cli.Command{
 		{
@@ -797,8 +933,38 @@ func main() {
 		},
 	}
 
+	virtc.Before = func(context *cli.Context) error {
+		if context.GlobalBool("debug") {
+			virtcLog.Level = logrus.DebugLevel
+		}
+
+		if path := context.GlobalString("log"); path != "" {
+			f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|os.O_SYNC, 0640)
+			if err != nil {
+				return err
+			}
+			virtcLog.Out = f
+		}
+
+		switch context.GlobalString("log-format") {
+		case "text":
+			// retain logrus's default.
+		case "json":
+			virtcLog.Formatter = new(logrus.JSONFormatter)
+		default:
+			return fmt.Errorf("unknown log-format %q", context.GlobalString("log-format"))
+		}
+
+		// Set virtcontainers logger.
+		vc.SetLog(virtcLog)
+
+		return nil
+	}
+
 	err := virtc.Run(os.Args)
 	if err != nil {
-		log.Fatal(err)
+		virtcLog.Fatal(err)
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 }

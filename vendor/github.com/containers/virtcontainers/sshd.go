@@ -51,6 +51,10 @@ func (c SshdConfig) validate() bool {
 }
 
 func publicKeyAuth(file string) (ssh.AuthMethod, error) {
+	if file == "" {
+		return nil, errNeedFile
+	}
+
 	privateBytes, err := ioutil.ReadFile(file)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to load private key")
@@ -65,6 +69,10 @@ func publicKeyAuth(file string) (ssh.AuthMethod, error) {
 }
 
 func execCmd(session *ssh.Session, cmd string) error {
+	if session == nil {
+		return fmt.Errorf("session cannot be empty")
+	}
+
 	stdout, err := session.CombinedOutput(cmd)
 
 	if err != nil {
@@ -78,6 +86,14 @@ func execCmd(session *ssh.Session, cmd string) error {
 
 // init is the agent initialization implementation for sshd.
 func (s *sshd) init(pod *Pod, config interface{}) error {
+	if pod == nil {
+		return errNeedPod
+	}
+
+	if config == nil {
+		return fmt.Errorf("config cannot be empty")
+	}
+
 	c := config.(SshdConfig)
 	if c.validate() == false {
 		return fmt.Errorf("Invalid configuration")
@@ -89,8 +105,33 @@ func (s *sshd) init(pod *Pod, config interface{}) error {
 	return nil
 }
 
-// start is the agent starting implementation for sshd.
-func (s *sshd) start(pod *Pod) error {
+// exec is the agent command execution implementation for sshd.
+func (s *sshd) exec(pod *Pod, c Container, process Process, cmd Cmd) error {
+	if pod == nil {
+		return errNeedPod
+	}
+
+	session, err := s.client.NewSession()
+	if err != nil {
+		return fmt.Errorf("Failed to create session (Pod ID %s, Container ID %s)",
+			pod.id, c.id)
+	}
+	defer session.Close()
+
+	if s.spawner != nil {
+		cmd.Args, err = s.spawner.formatArgs(cmd.Args)
+		if err != nil {
+			return err
+		}
+	}
+
+	strCmd := strings.Join(cmd.Args, " ")
+
+	return execCmd(session, strCmd)
+}
+
+// startPod is the agent Pod starting implementation for sshd.
+func (s *sshd) startPod(pod Pod) error {
 	if s.client != nil {
 		session, err := s.client.NewSession()
 		if err == nil {
@@ -126,36 +167,6 @@ func (s *sshd) start(pod *Pod) error {
 		return fmt.Errorf("Failed to dial: %s", err)
 	}
 
-	return nil
-}
-
-// stop is the agent stopping implementation for sshd.
-func (s *sshd) stop(pod Pod) error {
-	return nil
-}
-
-// exec is the agent command execution implementation for sshd.
-func (s *sshd) exec(pod *Pod, c Container, cmd Cmd) (*Process, error) {
-	session, err := s.client.NewSession()
-	if err != nil {
-		return nil, fmt.Errorf("Failed to create session")
-	}
-	defer session.Close()
-
-	if s.spawner != nil {
-		cmd.Args, err = s.spawner.formatArgs(cmd.Args)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	strCmd := strings.Join(cmd.Args, " ")
-
-	return nil, execCmd(session, strCmd)
-}
-
-// startPod is the agent Pod starting implementation for sshd.
-func (s *sshd) startPod(pod Pod) error {
 	return nil
 }
 

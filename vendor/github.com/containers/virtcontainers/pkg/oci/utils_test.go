@@ -56,6 +56,7 @@ func TestMinimalPodConfig(t *testing.T) {
 		HypervisorType: vc.QemuHypervisor,
 		AgentType:      vc.HyperstartAgent,
 		ProxyType:      vc.CCProxyType,
+		ShimType:       vc.CCShimType,
 		Console:        consolePath,
 	}
 
@@ -71,17 +72,17 @@ func TestMinimalPodConfig(t *testing.T) {
 				Value: "xterm",
 			},
 		},
-		WorkDir: "/",
-		User:    "0",
-		Group:   "0",
+		WorkDir:     "/",
+		User:        "0",
+		Group:       "0",
+		Interactive: true,
+		Console:     consolePath,
 	}
 
 	expectedContainerConfig := vc.ContainerConfig{
-		ID:          containerID,
-		RootFs:      "rootfs",
-		Interactive: true,
-		Console:     consolePath,
-		Cmd:         expectedCmd,
+		ID:     containerID,
+		RootFs: path.Join(tempBundlePath, "rootfs"),
+		Cmd:    expectedCmd,
 	}
 
 	expectedNetworkConfig := vc.NetworkConfig{
@@ -94,13 +95,12 @@ func TestMinimalPodConfig(t *testing.T) {
 		HypervisorType: vc.QemuHypervisor,
 		AgentType:      vc.HyperstartAgent,
 		ProxyType:      vc.CCProxyType,
+		ShimType:       vc.CCShimType,
 
 		NetworkModel:  vc.CNMNetworkModel,
 		NetworkConfig: expectedNetworkConfig,
 
 		Containers: []vc.ContainerConfig{expectedContainerConfig},
-
-		Console: consolePath,
 
 		Annotations: map[string]string{ociConfigPathKey: configPath},
 	}

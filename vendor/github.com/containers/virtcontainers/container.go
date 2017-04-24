@@ -21,9 +21,6 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
-
-	"github.com/01org/ciao/ssntp/uuid"
-	log "github.com/Sirupsen/logrus"
 )
 
 // Process gathers data related to a container process.
@@ -47,20 +44,18 @@ type ContainerConfig struct {
 	// RootFs is the container workload image on the host.
 	RootFs string
 
-	// Interactive specifies if the container runs in the foreground.
-	Interactive bool
-
-	// Console is a console path provided by the caller.
-	Console string
-
 	// Cmd specifies the command to run on a container
 	Cmd Cmd
 }
 
 // valid checks that the container configuration is valid.
 func (containerConfig *ContainerConfig) valid() bool {
+	if containerConfig == nil {
+		return false
+	}
+
 	if containerConfig.ID == "" {
-		containerConfig.ID = uuid.Generate().String()
+		return false
 	}
 
 	return true
@@ -114,6 +109,48 @@ func (c *Container) SetPid(pid int) error {
 	return c.storeProcess()
 }
 
+// URL returns the URL related to the pod.
+func (c *Container) URL() string {
+	return c.pod.URL()
+}
+
+func (c *Container) startShim() error {
+	proxyInfo, url, err := c.pod.proxy.connect(*(c.pod), true)
+	if err != nil {
+		return err
+	}
+
+	if err := c.pod.proxy.disconnect(); err != nil {
+		return err
+	}
+
+	if c.pod.state.URL != url {
+		return fmt.Errorf("Pod URL %s and URL from proxy %s MUST be identical", c.pod.state.URL, url)
+	}
+
+	shimParams := ShimParams{
+		Token:   proxyInfo.Token,
+		URL:     url,
+		Console: c.config.Cmd.Console,
+	}
+
+	pid, err := c.pod.shim.start(*(c.pod), shimParams)
+	if err != nil {
+		return err
+	}
+
+	c.process = Process{
+		Token: proxyInfo.Token,
+		Pid:   pid,
+	}
+
+	if err := c.storeProcess(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (c *Container) storeProcess() error {
 	return c.pod.storage.storeContainerProcess(c.podID, c.id, c.process)
 }
@@ -124,13 +161,21 @@ func (c *Container) fetchProcess() (Process, error) {
 
 // fetchContainer fetches a container config from a pod ID and returns a Container.
 func fetchContainer(pod *Pod, containerID string) (*Container, error) {
+	if pod == nil {
+		return nil, errNeedPod
+	}
+
+	if containerID == "" {
+		return nil, errNeedContainerID
+	}
+
 	fs := filesystem{}
 	config, err := fs.fetchContainerConfig(pod.id, containerID)
 	if err != nil {
 		return nil, err
 	}
 
-	log.Infof("Info structure:\n%+v\n", config)
+	virtLog.Infof("Info structure: %+v", config)
 
 	return createContainer(pod, config)
 }
@@ -147,6 +192,10 @@ func (c *Container) storeContainer() error {
 }
 
 func (c *Container) setContainerState(state stateString) error {
+	if state == "" {
+		return errNeedState
+	}
+
 	c.state = State{
 		State: state,
 	}
@@ -175,9 +224,13 @@ func (c *Container) createContainersDirs() error {
 }
 
 func createContainers(pod *Pod, contConfigs []ContainerConfig) ([]*Container, error) {
+	if pod == nil {
+		return nil, errNeedPod
+	}
+
 	var containers []*Container
 
-	for _, contConfig := range contConfigs {
+	for idx, contConfig := range contConfigs {
 		if contConfig.valid() == false {
 			return containers, fmt.Errorf("Invalid container configuration")
 		}
@@ -186,7 +239,7 @@ func createContainers(pod *Pod, contConfigs []ContainerConfig) ([]*Container, er
 			id:            contConfig.ID,
 			podID:         pod.id,
 			rootFs:        contConfig.RootFs,
-			config:        &contConfig,
+			config:        &contConfigs[idx],
 			pod:           pod,
 			runPath:       filepath.Join(runStoragePath, pod.id, contConfig.ID),
 			configPath:    filepath.Join(configStoragePath, pod.id, contConfig.ID),
@@ -212,6 +265,10 @@ func createContainers(pod *Pod, contConfigs []ContainerConfig) ([]*Container, er
 }
 
 func createContainer(pod *Pod, contConfig ContainerConfig) (*Container, error) {
+	if pod == nil {
+		return nil, errNeedPod
+	}
+
 	if contConfig.valid() == false {
 		return nil, fmt.Errorf("Invalid container configuration")
 	}
@@ -251,7 +308,7 @@ func createContainer(pod *Pod, contConfig ContainerConfig) (*Container, error) {
 	// specific case.
 	pod.containers = append(pod.containers, c)
 
-	if err := c.pod.agent.createContainer(pod, c); err != nil {
+	if err := c.startShim(); err != nil {
 		return nil, err
 	}
 
@@ -286,6 +343,10 @@ func (c *Container) delete() error {
 // for and is only used to make the returned error as descriptive as
 // possible.
 func (c *Container) fetchState(cmd string) (State, error) {
+	if cmd == "" {
+		return State{}, fmt.Errorf("Cmd cannot be empty")
+	}
+
 	state, err := c.pod.storage.fetchPodState(c.pod.id)
 	if err != nil {
 		return State{}, err
@@ -321,6 +382,11 @@ func (c *Container) start() error {
 		}
 	}
 
+	if _, _, err := c.pod.proxy.connect(*(c.pod), false); err != nil {
+		return err
+	}
+	defer c.pod.proxy.disconnect()
+
 	err = c.pod.agent.startContainer(*(c.pod), *c)
 	if err != nil {
 		c.stop()
@@ -350,6 +416,11 @@ func (c *Container) stop() error {
 		return err
 	}
 
+	if _, _, err := c.pod.proxy.connect(*(c.pod), false); err != nil {
+		return err
+	}
+	defer c.pod.proxy.disconnect()
+
 	err = c.pod.agent.killContainer(*(c.pod), *c, syscall.SIGTERM)
 	if err != nil {
 		return err
@@ -378,8 +449,33 @@ func (c *Container) enter(cmd Cmd) (*Process, error) {
 		return nil, fmt.Errorf("Container not running, impossible to enter")
 	}
 
-	process, err := c.pod.agent.exec(c.pod, *c, cmd)
+	proxyInfo, url, err := c.pod.proxy.connect(*(c.pod), true)
 	if err != nil {
+		return nil, err
+	}
+	defer c.pod.proxy.disconnect()
+
+	if c.pod.state.URL != url {
+		return nil, fmt.Errorf("Pod URL %s and URL from proxy %s MUST be identical", c.pod.state.URL, url)
+	}
+
+	shimParams := ShimParams{
+		Token:   proxyInfo.Token,
+		URL:     url,
+		Console: cmd.Console,
+	}
+
+	pid, err := c.pod.shim.start(*(c.pod), shimParams)
+	if err != nil {
+		return nil, err
+	}
+
+	process := &Process{
+		Token: proxyInfo.Token,
+		Pid:   pid,
+	}
+
+	if err := c.pod.agent.exec(c.pod, *c, *process, cmd); err != nil {
 		return nil, err
 	}
 
@@ -395,6 +491,11 @@ func (c *Container) kill(signal syscall.Signal) error {
 	if state.State != StateRunning {
 		return fmt.Errorf("Container not running, impossible to signal the container")
 	}
+
+	if _, _, err := c.pod.proxy.connect(*(c.pod), false); err != nil {
+		return err
+	}
+	defer c.pod.proxy.disconnect()
 
 	err = c.pod.agent.killContainer(*(c.pod), *c, signal)
 	if err != nil {

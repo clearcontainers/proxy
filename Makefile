@@ -5,7 +5,7 @@ LIBEXECDIR := $(PREFIX)/libexec
 LOCALSTATEDIR := /var
 
 SOURCES := $(shell find . 2>&1 | grep -E '.*\.(c|h|go)$$')
-PROXY_SOCKET := $(LOCALSTATEDIR)/run/clearcontainers/proxy.sock
+PROXY_SOCKET := $(LOCALSTATEDIR)/run/clear-containers/proxy.sock
 
 #
 # systemd files
@@ -77,7 +77,7 @@ endef
 all-installable: cc-proxy $(UNIT_FILES)
 
 install: all-installable
-	$(call INSTALL_EXEC,cc-proxy,$(LIBEXECDIR)/clearcontainers)
+	$(call INSTALL_EXEC,cc-proxy,$(LIBEXECDIR)/clear-containers)
 	$(foreach f,$(UNIT_FILES),$(call INSTALL_FILE,$f,$(UNIT_DIR)))
 
 clean:

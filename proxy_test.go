@@ -154,6 +154,16 @@ func (rig *testRig) ServeNewClient() net.Conn {
 	return clientConn
 }
 
+// ServeNewShim is a specialization of ServerNewClient that returns a mock shim
+// already connected to the proxy.
+func (rig *testRig) ServeNewShim(token string) *shimRig {
+	shimConn := rig.ServeNewClient()
+	shim := newShimRig(rig.t, shimConn, token)
+	err := shim.connect()
+	assert.Nil(rig.t, err)
+	return shim
+}
+
 const testContainerID = "0987654321"
 
 func TestRegisterVM(t *testing.T) {
@@ -396,12 +406,7 @@ func TestHyperSequenceNumberRelocation(t *testing.T) {
 	rig.Start()
 
 	token := rig.RegisterVM()
-
-	// Create a new connection for the shim and register it.
-	shimConn := rig.ServeNewClient()
-	shim := newShimRig(t, shimConn, token)
-	err := shim.connect()
-	assert.Nil(t, err)
+	shim := rig.ServeNewShim(token)
 
 	// Send newcontainer hyper command
 	newcontainer := hyperstart.Container{
@@ -410,7 +415,7 @@ func TestHyperSequenceNumberRelocation(t *testing.T) {
 			Args: []string{"/bin/sh"},
 		},
 	}
-	err = rig.Client.HyperWithTokens("newcontainer", []string{token}, &newcontainer)
+	err := rig.Client.HyperWithTokens("newcontainer", []string{token}, &newcontainer)
 	assert.Nil(t, err)
 
 	// Verify hyperstart has received the message with relocation
@@ -484,13 +489,8 @@ func TestShimIO(t *testing.T) {
 	rig.Start()
 
 	token := rig.RegisterVM()
+	shim := rig.ServeNewShim(token)
 	session := peekIOSession(rig.proxy, token)
-
-	// Create a new connection for the shim and register it.
-	shimConn := rig.ServeNewClient()
-	shim := newShimRig(t, shimConn, token)
-	err := shim.connect()
-	assert.Nil(t, err)
 
 	// Send stdin data.
 	stdinData := "stdin\n"
@@ -502,7 +502,6 @@ func TestShimIO(t *testing.T) {
 	assert.Equal(t, session.ioBase, seq)
 	assert.Equal(t, len(stdinData)+12, n)
 	assert.Equal(t, stdinData, string(buf[12:n]))
-	assert.Nil(t, err)
 
 	// make hyperstart send something on stdout/stderr and verify we
 	// receive it.
@@ -549,20 +548,15 @@ func TestShimSignal(t *testing.T) {
 	rig.Start()
 
 	token := rig.RegisterVM()
+	shim := rig.ServeNewShim(token)
 	session := peekIOSession(rig.proxy, token)
-
-	// Create a new connection for the shim and register it.
-	shimConn := rig.ServeNewClient()
-	shim := newShimRig(t, shimConn, token)
-	err := shim.connect()
-	assert.Nil(t, err)
 
 	// Send signal and check hyperstart receives the right thing.
 	shim.client.Kill(syscall.SIGUSR1)
 	msgs := rig.Hyperstart.GetLastMessages()
 	assert.Equal(t, 1, len(msgs))
 	decoded := hyperstart.KillCommand{}
-	err = json.Unmarshal(msgs[0].Message, &decoded)
+	err := json.Unmarshal(msgs[0].Message, &decoded)
 	assert.Nil(t, err)
 	assert.Equal(t, syscall.SIGUSR1, decoded.Signal)
 	assert.Equal(t, testContainerID, decoded.Container)

@@ -56,7 +56,7 @@ type vm struct {
 	// tokenToSession associate a token to the corresponding ioSession
 	tokenToSession map[Token]*ioSession
 
-	// nullSession is a special I/O session used for containers and execmd processes
+	// nullSession is a special I/O session used for containers and execcmd processes
 	// when client of the proxy indicates they don't care about communicating with the
 	// process inside the VM.
 	nullSession ioSession
@@ -351,7 +351,7 @@ func newcontainerHandler(vm *vm, hyper *api.Hyper, session *ioSession) error {
 }
 
 // RelocateHyperCommand performs the sequence number relocation in the
-// newcontainer and execmd hyper commands given the corresponding list of
+// newcontainer and execcmd hyper commands given the corresponding list of
 // tokens. Starpod isn't handled as it's not currently use to start processes
 // and indicated as deprecated in the hyperstart API.
 func (vm *vm) relocateHyperCommand(hyper *api.Hyper) error {

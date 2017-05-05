@@ -483,6 +483,9 @@ func TestShimIO(t *testing.T) {
 	shim := rig.ServeNewShim(token)
 	session := peekIOSession(rig.proxy, token)
 
+	// Simulate that a runtime has started the VM process
+	close(session.processStarted)
+
 	// Send stdin data.
 	stdinData := "stdin\n"
 	shim.writeIOString(stdinData)
@@ -569,8 +572,8 @@ func TestShimSignal(t *testing.T) {
 	rig.Stop()
 }
 
-// smallWaitForShimTimeout overrides the default timeout for the tests
-const smallWaitForShimTimeout = 20 * time.Millisecond
+// smallWaitTimeout overrides the default timeout for the tests
+const smallWaitTimeout = 20 * time.Millisecond
 
 // TestShimConnectAfterExeccmd tests we correctly wait for the shim to connect
 // before forwarding the execcmd to hyperstart.
@@ -583,7 +586,7 @@ func TestShimConnectAfterExeccmd(t *testing.T) {
 	// Send an execcmd. Since we don't have the corresponding shim yet, this
 	// should time out.
 	oldTimeout := waitForShimTimeout
-	waitForShimTimeout = smallWaitForShimTimeout
+	waitForShimTimeout = smallWaitTimeout
 	execcmd := hyperstart.ExecCommand{
 		Container: testContainerID,
 		Process: hyperstart.Process{
@@ -602,7 +605,7 @@ func TestShimConnectAfterExeccmd(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
-		time.Sleep(smallWaitForShimTimeout)
+		time.Sleep(smallWaitTimeout)
 		err := shim.connect()
 		assert.Nil(t, err)
 		wg.Done()
@@ -616,5 +619,71 @@ func TestShimConnectAfterExeccmd(t *testing.T) {
 	// Cleanup
 	shim.close()
 
+	rig.Stop()
+}
+
+// TestShimSendStdinAfterExeccmd tests we correctly wait for the runtime to
+// start the executable inside the VM before letting the shim send stdin data.
+func TestShimSendStdinAfterExeccmd(t *testing.T) {
+	rig := newTestRig(t)
+	rig.Start()
+
+	token := rig.RegisterVM()
+	shim := rig.ServeNewShim(token)
+
+	// Send stdin data. Since the runtime hasn't launched the workload yet, this
+	// should time out.
+	waitForProcessTimeout = smallWaitTimeout
+
+	// For streams, we don't get a message back from the proxy, so err here will
+	// be nil even if we timeout waiting for the process to be started.
+	// This also means that SendStdin isn't blocking. It doesn't have to wait for
+	// a Response from the proxy.
+	err := shim.client.SendStdin([]byte("hello1\n"))
+	assert.Nil(t, err)
+	shim.close()
+
+	// Because SendStdin isn't blocking, wait manually for the timeout.
+	time.Sleep(2 * smallWaitTimeout)
+
+	// Timeout should have fired and the proxy handled the error by closing the
+	// shim connections.
+	_, err = shim.conn.Write([]byte{' '})
+	assert.NotNil(t, err)
+
+	// The shim just lost its connection because we timed out waiting for the
+	// runtime to start the process. Connect again.
+	shim = rig.ServeNewShim(token)
+
+	// Do the same, but now mocking the runtime starting a process.
+	var wg sync.WaitGroup
+	stdinData := "hello2\n"
+	wg.Add(1)
+	go func() {
+		time.Sleep(smallWaitTimeout)
+		err := shim.client.SendStdin([]byte(stdinData))
+		assert.Nil(t, err)
+		wg.Done()
+	}()
+
+	execcmd := hyperstart.ExecCommand{
+		Container: testContainerID,
+		Process: hyperstart.Process{
+			Args: []string{"/bin/sh"},
+		},
+	}
+	err = rig.Client.HyperWithTokens("execcmd", []string{token}, &execcmd)
+	assert.Nil(t, err)
+
+	wg.Wait()
+
+	// check stdin data arrives correctly to hyperstart
+	buf := make([]byte, 512)
+	n, _ := rig.Hyperstart.ReadIo(buf)
+	assert.Equal(t, len(stdinData)+12, n)
+	assert.Equal(t, stdinData, string(buf[12:n]))
+
+	// Cleanup
+	shim.close()
 	rig.Stop()
 }

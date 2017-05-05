@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -425,7 +426,9 @@ func (session *ioSession) WaitForShim() error {
 	select {
 	case <-session.shimConnected:
 	case <-time.After(waitForShimTimeout):
-		return fmt.Errorf("timeout waiting for shim with token %s", session.token)
+		msg := fmt.Sprintf("timeout waiting for shim with token %s", session.token)
+		session.vm.logIO.Error(msg)
+		return errors.New(msg)
 	}
 	return nil
 }

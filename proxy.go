@@ -537,6 +537,17 @@ func (proxy *proxy) serveNewClient(proto *protocol, newConn net.Conn) {
 		newClient.log.Errorf("error serving client: %v", err)
 	}
 
+	// The client was a shim with a session still alive. This means DisconnectShim
+	// hasn't been called and we're closing the connection because of an error
+	// (either us or the shim has closed the connection). We want to keep the
+	// session alive and hope a shim will reconnect claiming the same token.
+	if newClient.session != nil {
+		proxy.Lock()
+		info := proxy.tokenToVM[newClient.token]
+		info.state = tokenStateAllocated
+		proxy.Unlock()
+	}
+
 	newConn.Close()
 	newClient.log.Info("connection closed")
 }

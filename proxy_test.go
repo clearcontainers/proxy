@@ -129,6 +129,16 @@ func (rig *testRig) Stop() {
 		rig.detector.Compare(os.Stdout, rig.startFds, rig.stopFds))
 }
 
+// RegisterVM registers a new VM, returning 1 token that can be used by a shim.
+func (rig *testRig) RegisterVM() (token string) {
+	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
+	ret, err := rig.Client.RegisterVM(testContainerID, ctlSocketPath, ioSocketPath,
+		&goapi.RegisterVMOptions{NumIOStreams: 1})
+	assert.Nil(rig.t, err)
+	assert.Equal(rig.t, 1, len(ret.IO.Tokens))
+	return ret.IO.Tokens[0]
+}
+
 // ServeNewClient simulate a new client connecting to the proxy. It returns the
 // net.Conn that represents client-side connection to the proxy.
 func (rig *testRig) ServeNewClient() net.Conn {
@@ -142,6 +152,16 @@ func (rig *testRig) ServeNewClient() net.Conn {
 	}()
 
 	return clientConn
+}
+
+// ServeNewShim is a specialization of ServerNewClient that returns a mock shim
+// already connected to the proxy.
+func (rig *testRig) ServeNewShim(token string) *shimRig {
+	shimConn := rig.ServeNewClient()
+	shim := newShimRig(rig.t, shimConn, token)
+	err := shim.connect()
+	assert.Nil(rig.t, err)
+	return shim
 }
 
 const testContainerID = "0987654321"
@@ -353,17 +373,10 @@ func TestConnectShim(t *testing.T) {
 	rig := newTestRig(t)
 	rig.Start()
 
-	// Register new VM, asking for tokens. We use the assumption the same
-	// connection can be used for ConnectShim, which is true in the tests.
-	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
-	ret, err := rig.Client.RegisterVM(testContainerID, ctlSocketPath, ioSocketPath,
-		&goapi.RegisterVMOptions{NumIOStreams: 1})
-	assert.Nil(t, err)
-	assert.Equal(t, 1, len(ret.IO.Tokens))
-	token := ret.IO.Tokens[0]
+	token := rig.RegisterVM()
 
 	// Using a bad token should result in an error
-	err = rig.Client.ConnectShim("notatoken")
+	err := rig.Client.ConnectShim("notatoken")
 	assert.NotNil(t, err)
 
 	// Register shim with an existing token, all should be good
@@ -392,21 +405,8 @@ func TestHyperSequenceNumberRelocation(t *testing.T) {
 	rig := newTestRig(t)
 	rig.Start()
 
-	// Register new VM, asking for tokens. We use the assumption the same
-	// connection can be used for ConnectShim, which is true in the tests.
-	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
-	ret, err := rig.Client.RegisterVM(
-		testContainerID, ctlSocketPath, ioSocketPath,
-		&goapi.RegisterVMOptions{NumIOStreams: 1})
-	assert.Nil(t, err)
-	tokens := ret.IO.Tokens
-	assert.Equal(t, 1, len(tokens))
-
-	// Create a new connection for the shim and register it.
-	shimConn := rig.ServeNewClient()
-	shim := newShimRig(t, shimConn, tokens[0])
-	err = shim.connect()
-	assert.Nil(t, err)
+	token := rig.RegisterVM()
+	shim := rig.ServeNewShim(token)
 
 	// Send newcontainer hyper command
 	newcontainer := hyperstart.Container{
@@ -415,7 +415,7 @@ func TestHyperSequenceNumberRelocation(t *testing.T) {
 			Args: []string{"/bin/sh"},
 		},
 	}
-	err = rig.Client.HyperWithTokens("newcontainer", tokens, &newcontainer)
+	err := rig.Client.HyperWithTokens("newcontainer", []string{token}, &newcontainer)
 	assert.Nil(t, err)
 
 	// Verify hyperstart has received the message with relocation
@@ -488,21 +488,9 @@ func TestShimIO(t *testing.T) {
 	rig := newTestRig(t)
 	rig.Start()
 
-	// Register new VM, asking for tokens. We use the assumption the same
-	// connection can be used for ConnectShim, which is true in the tests.
-	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
-	ret, err := rig.Client.RegisterVM(testContainerID, ctlSocketPath, ioSocketPath,
-		&goapi.RegisterVMOptions{NumIOStreams: 1})
-	assert.Nil(t, err)
-	assert.Equal(t, 1, len(ret.IO.Tokens))
-	token := ret.IO.Tokens[0]
+	token := rig.RegisterVM()
+	shim := rig.ServeNewShim(token)
 	session := peekIOSession(rig.proxy, token)
-
-	// Create a new connection for the shim and register it.
-	shimConn := rig.ServeNewClient()
-	shim := newShimRig(t, shimConn, token)
-	err = shim.connect()
-	assert.Nil(t, err)
 
 	// Send stdin data.
 	stdinData := "stdin\n"
@@ -514,7 +502,6 @@ func TestShimIO(t *testing.T) {
 	assert.Equal(t, session.ioBase, seq)
 	assert.Equal(t, len(stdinData)+12, n)
 	assert.Equal(t, stdinData, string(buf[12:n]))
-	assert.Nil(t, err)
 
 	// make hyperstart send something on stdout/stderr and verify we
 	// receive it.
@@ -560,28 +547,16 @@ func TestShimSignal(t *testing.T) {
 	rig := newTestRig(t)
 	rig.Start()
 
-	// Register new VM, asking for tokens. We use the assumption the same
-	// connection can be used for ConnectShim, which is true in the tests.
-	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
-	ret, err := rig.Client.RegisterVM(testContainerID, ctlSocketPath, ioSocketPath,
-		&goapi.RegisterVMOptions{NumIOStreams: 1})
-	assert.Nil(t, err)
-	assert.Equal(t, 1, len(ret.IO.Tokens))
-	token := ret.IO.Tokens[0]
+	token := rig.RegisterVM()
+	shim := rig.ServeNewShim(token)
 	session := peekIOSession(rig.proxy, token)
-
-	// Create a new connection for the shim and register it.
-	shimConn := rig.ServeNewClient()
-	shim := newShimRig(t, shimConn, token)
-	err = shim.connect()
-	assert.Nil(t, err)
 
 	// Send signal and check hyperstart receives the right thing.
 	shim.client.Kill(syscall.SIGUSR1)
 	msgs := rig.Hyperstart.GetLastMessages()
 	assert.Equal(t, 1, len(msgs))
 	decoded := hyperstart.KillCommand{}
-	err = json.Unmarshal(msgs[0].Message, &decoded)
+	err := json.Unmarshal(msgs[0].Message, &decoded)
 	assert.Nil(t, err)
 	assert.Equal(t, syscall.SIGUSR1, decoded.Signal)
 	assert.Equal(t, testContainerID, decoded.Container)
@@ -612,14 +587,7 @@ func TestShimConnectAfterExeccmd(t *testing.T) {
 	rig := newTestRig(t)
 	rig.Start()
 
-	// Register new VM, asking for tokens. We use the assumption the same
-	// connection can be used for ConnectShim, which is true in the tests.:62
-	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
-	ret, err := rig.Client.RegisterVM(testContainerID, ctlSocketPath, ioSocketPath,
-		&goapi.RegisterVMOptions{NumIOStreams: 1})
-	assert.Nil(t, err)
-	assert.Equal(t, 1, len(ret.IO.Tokens))
-	tokens := ret.IO.Tokens
+	token := rig.RegisterVM()
 
 	// Send an execcmd. Since we don't have the corresponding shim yet, this
 	// should time out.
@@ -631,14 +599,14 @@ func TestShimConnectAfterExeccmd(t *testing.T) {
 			Args: []string{"/bin/sh"},
 		},
 	}
-	err = rig.Client.HyperWithTokens("execcmd", tokens, &execcmd)
+	err := rig.Client.HyperWithTokens("execcmd", []string{token}, &execcmd)
 	assert.NotNil(t, err)
 	assert.True(t, strings.Contains(err.Error(), "timeout"))
 	waitForShimTimeout = oldTimeout
 
 	// Send an execcmd again, but this time will connect the shim just after the command.
 	shimConn := rig.ServeNewClient()
-	shim := newShimRig(t, shimConn, tokens[0])
+	shim := newShimRig(t, shimConn, token)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -649,7 +617,7 @@ func TestShimConnectAfterExeccmd(t *testing.T) {
 		wg.Done()
 	}()
 
-	err = rig.Client.HyperWithTokens("execcmd", tokens, &execcmd)
+	err = rig.Client.HyperWithTokens("execcmd", []string{token}, &execcmd)
 	assert.Nil(t, err)
 
 	wg.Wait()

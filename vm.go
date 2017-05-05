@@ -469,18 +469,22 @@ var waitForProcessTimeout = 30 * time.Second
 
 // WaitForProcess will wait until the process inside the VM is fully started. If
 // it's already the case, WaitForProcess will return immediately.
-func (session *ioSession) WaitForProcess() error {
+// shouldReset controls if we should reset the internal shim state on timeout.
+// It should be set to true in code path that will close the shim connection on
+// timeout.
+func (session *ioSession) WaitForProcess(shouldReset bool) error {
 	session.vm.logIO.Infof("waiting for runtime to execute the process for token %s (timeout %s)",
 		session.token, waitForProcessTimeout)
 
 	select {
 	case <-session.processStarted:
 	case <-time.After(waitForProcessTimeout):
+		// Runtime failed to do a newcontainer or execcmd.
 		msg := fmt.Sprintf("timeout waiting for process with token %s", session.token)
 		session.vm.logIO.Error(msg)
-		// Runtime failed to do a newcontainer or execcmd. This error will cause us
-		// to close the connection to the sim.
-		session.ResetShim()
+		if shouldReset {
+			session.ResetShim()
+		}
 		return errors.New(msg)
 	}
 
@@ -498,7 +502,7 @@ func (session *ioSession) ForwardStdin(frame *api.Frame) error {
 		return fmt.Errorf("expected stdin stream frame got %s", streamType)
 	}
 
-	if err := session.WaitForProcess(); err != nil {
+	if err := session.WaitForProcess(true); err != nil {
 		return err
 	}
 

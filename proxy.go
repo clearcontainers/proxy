@@ -428,6 +428,12 @@ func signal(data []byte, userData interface{}, response *handlerResponse) {
 
 	client.log.Infof("Signal(%s,%d,%d)", signal, payload.Columns, payload.Rows)
 
+	// Wait for the process inside the VM to be started if needed.
+	if err := session.WaitForProcess(false); err != nil {
+		response.SetError(err)
+		return
+	}
+
 	var err error
 	if signal == syscall.SIGWINCH {
 		err = session.SendTerminalSize(payload.Columns, payload.Rows)

@@ -545,6 +545,9 @@ func TestShimSignal(t *testing.T) {
 	shim := rig.ServeNewShim(token)
 	session := peekIOSession(rig.proxy, token)
 
+	// Simulate that a runtime has started the VM process
+	close(session.processStarted)
+
 	// Send signal and check hyperstart receives the right thing.
 	shim.client.Kill(syscall.SIGUSR1)
 	msgs := rig.Hyperstart.GetLastMessages()
@@ -619,6 +622,62 @@ func TestShimConnectAfterExeccmd(t *testing.T) {
 	// Cleanup
 	shim.close()
 
+	rig.Stop()
+}
+
+// TestShimSendSignalAfterExeccmd tests we correctly wait for the runtime to
+// start the executable inside the VM before letting the shim send any signal
+// commands.
+func TestShimSendSignalAfterExeccmd(t *testing.T) {
+	rig := newTestRig(t)
+	rig.Start()
+
+	token := rig.RegisterVM()
+	shim := rig.ServeNewShim(token)
+
+	// Send a signal. Since the runtime hasn't launched the workload yet, this
+	// should time out.
+	oldTimeout := waitForProcessTimeout
+	waitForProcessTimeout = smallWaitTimeout
+
+	// Kill should time out
+	err := shim.client.Kill(syscall.SIGUSR1)
+	assert.NotNil(t, err)
+	assert.True(t, strings.Contains(err.Error(), "timeout"))
+	// nothing should have been sent to hyperstart
+	msgs := rig.Hyperstart.GetLastMessages()
+	assert.Equal(t, 0, len(msgs))
+
+	waitForProcessTimeout = oldTimeout
+
+	// Do the same, but now mocking the runtime starting a process.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		time.Sleep(smallWaitTimeout)
+		err := shim.client.Kill(syscall.SIGUSR1)
+		assert.Nil(t, err)
+		wg.Done()
+	}()
+
+	execcmd := hyperstart.ExecCommand{
+		Container: testContainerID,
+		Process: hyperstart.Process{
+			Args: []string{"/bin/sh"},
+		},
+	}
+	err = rig.Client.HyperWithTokens("execcmd", []string{token}, &execcmd)
+	assert.Nil(t, err)
+
+	wg.Wait()
+
+	// This time the signal cmd has been forwarded. Hyperstart should have
+	// received two messages (execcmd + signal)
+	msgs = rig.Hyperstart.GetLastMessages()
+	assert.Equal(t, 2, len(msgs))
+
+	// Cleanup
+	shim.close()
 	rig.Stop()
 }
 

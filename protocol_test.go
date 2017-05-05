@@ -33,6 +33,7 @@ type mockServer struct {
 	t                      *testing.T
 	proto                  *protocol
 	serverConn, clientConn net.Conn
+	wg                     sync.WaitGroup
 }
 
 func newMockServer(t *testing.T, proto *protocol) *mockServer {
@@ -61,15 +62,25 @@ func (server *mockServer) ServeWithUserData(userData interface{}) {
 	if err := server.proto.Serve(server.serverConn, userData); err != nil {
 		server.serverConn.Close()
 	}
+	server.wg.Done()
+}
 
+func (server *mockServer) Close() {
+	server.serverConn.Close()
+	server.wg.Wait()
+}
+
+func setupMockServerWithUserData(t *testing.T, proto *protocol, userData interface{}) (client net.Conn, server *mockServer) {
+	server = newMockServer(t, proto)
+	client = server.GetClientConn()
+	server.wg.Add(1)
+	go server.ServeWithUserData(userData)
+
+	return client, server
 }
 
 func setupMockServer(t *testing.T, proto *protocol) (client net.Conn, server *mockServer) {
-	server = newMockServer(t, proto)
-	client = server.GetClientConn()
-	go server.Serve()
-
-	return client, server
+	return setupMockServerWithUserData(t, proto, nil)
 }
 
 // Test that we correctly give back the user data to handlers
@@ -91,17 +102,17 @@ func TestUserData(t *testing.T) {
 	proto := newProtocol()
 	proto.HandleCommand(api.Command(0), userDataHandler)
 
-	server := newMockServer(t, proto)
-	client := server.GetClientConn()
 	testUserData.t = t
-	go server.ServeWithUserData(&testUserData)
-
 	testUserData.wg.Add(1)
+	client, server := setupMockServerWithUserData(t, proto, &testUserData)
+
 	err := api.WriteCommand(client, api.Command(0), nil)
 	assert.Nil(t, err)
 
 	// make sure the handler runs by waiting for it
 	testUserData.wg.Wait()
+
+	server.Close()
 }
 
 // Tests various behaviours of the protocol main loop and handler dispatching
@@ -149,7 +160,7 @@ func TestProtocol(t *testing.T) {
 	proto.HandleCommand(api.Command(2), returnErrorHandler)
 	proto.HandleCommand(api.Command(3), echoHandler)
 
-	client, _ := setupMockServer(t, proto)
+	client, server := setupMockServer(t, proto)
 
 	for _, test := range tests {
 		// request
@@ -163,6 +174,8 @@ func TestProtocol(t *testing.T) {
 		assert.NotNil(t, frame)
 		assert.Equal(t, test.output, string(frame.Payload))
 	}
+
+	server.Close()
 }
 
 // Make sure the server closes the connection when encountering an error
@@ -170,7 +183,7 @@ func TestCloseOnError(t *testing.T) {
 	proto := newProtocol()
 	proto.HandleCommand(api.Command(0), simpleHandler)
 
-	client, _ := setupMockServer(t, proto)
+	client, server := setupMockServer(t, proto)
 
 	// bad request
 	err := api.WriteCommand(client, api.Command(255), nil)
@@ -180,6 +193,8 @@ func TestCloseOnError(t *testing.T) {
 	buf := make([]byte, 512)
 	_, err = client.Read(buf)
 	assert.Equal(t, err, io.EOF)
+
+	server.Close()
 }
 
 func TestMain(m *testing.M) {

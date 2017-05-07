@@ -306,7 +306,7 @@ func relocateProcess(process *hyperstart.Process, session *ioSession) error {
 	// When relocating a process asking for a terminal, we need to make sure
 	// Process.Stderr is 0. We only need the Stdio sequence number in that case and
 	// hyperstart will be mad at us if we specify Stderr.
-	if process.Terminal == false {
+	if !process.Terminal {
 		process.Stderr = session.ioBase + 1
 	}
 

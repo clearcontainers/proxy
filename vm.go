@@ -606,7 +606,7 @@ func (vm *vm) Close() {
 	// properly cleaning up all sessions.
 	vm.Lock()
 	for token := range vm.tokenToSession {
-		vm.freeTokenUnlocked(token)
+		_ = vm.freeTokenUnlocked(token)
 		delete(vm.tokenToSession, token)
 	}
 	vm.Unlock()

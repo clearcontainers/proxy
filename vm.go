@@ -339,7 +339,10 @@ func newcontainerHandler(vm *vm, hyper *api.Hyper, session *ioSession) error {
 		return err
 	}
 
-	relocateProcess(cmdIn.Process, session)
+	if err := relocateProcess(cmdIn.Process, session); err != nil {
+		return err
+	}
+
 	newData, err := json.Marshal(&cmdIn)
 	if err != nil {
 		return err

@@ -74,7 +74,7 @@ type proxy struct {
 type clientKind int
 
 const (
-	clientKindRuntime clientKind = 1 << iota
+	clientKindRuntime clientKind = iota
 	clientKindShim
 )
 
@@ -535,6 +535,7 @@ func (proxy *proxy) serveNewClient(proto *protocol, newConn net.Conn) {
 		id:    nextClientID,
 		proxy: proxy,
 		conn:  newConn,
+		kind:  clientKindRuntime,
 	}
 
 	atomic.AddUint64(&nextClientID, 1)

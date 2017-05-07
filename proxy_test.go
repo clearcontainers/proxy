@@ -39,12 +39,7 @@ type testRig struct {
 	wg sync.WaitGroup
 
 	// hyperstart mocking
-	Hyperstart      *mock.Hyperstart
-	ctlPath, ioPath string
-
-	// Control if we start the proxy in the test process or as a separate
-	// process
-	proxyFork bool
+	Hyperstart *mock.Hyperstart
 
 	// proxy, in process
 	proxy      *proxy

@@ -74,7 +74,7 @@ type proxy struct {
 type clientKind int
 
 const (
-	clientKindRuntime clientKind = 1 << iota
+	clientKindRuntime clientKind = iota
 	clientKindShim
 )
 
@@ -535,6 +535,7 @@ func (proxy *proxy) serveNewClient(proto *protocol, newConn net.Conn) {
 		id:    nextClientID,
 		proxy: proxy,
 		conn:  newConn,
+		kind:  clientKindRuntime,
 	}
 
 	atomic.AddUint64(&nextClientID, 1)
@@ -599,12 +600,12 @@ func proxyMain() {
 
 func initLogging() {
 	// We print logs on stderr by default.
-	flag.Set("logtostderr", "true")
+	_ = flag.Set("logtostderr", "true")
 
 	// It can be practical to use an environment variable to trigger a verbose output
 	level := os.Getenv("CC_PROXY_LOG_LEVEL")
 	if level != "" {
-		flag.Set("v", level)
+		_ = flag.Set("v", level)
 	}
 }
 
@@ -624,7 +625,7 @@ func (p *profiler) setup() {
 	glog.V(1).Info("pprof enabled on " + url)
 
 	go func() {
-		http.ListenAndServe(addr, nil)
+		_ = http.ListenAndServe(addr, nil)
 	}()
 }
 

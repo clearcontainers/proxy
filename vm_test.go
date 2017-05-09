@@ -32,8 +32,7 @@ type vmRig struct {
 	wg sync.WaitGroup
 
 	// hyperstart mocking
-	Hyperstart      *mock.Hyperstart
-	ctlPath, ioPath string
+	Hyperstart *mock.Hyperstart
 }
 
 func newVMRig(t *testing.T) *vmRig {

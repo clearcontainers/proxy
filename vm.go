@@ -306,7 +306,7 @@ func relocateProcess(process *hyperstart.Process, session *ioSession) error {
 	// When relocating a process asking for a terminal, we need to make sure
 	// Process.Stderr is 0. We only need the Stdio sequence number in that case and
 	// hyperstart will be mad at us if we specify Stderr.
-	if process.Terminal == false {
+	if !process.Terminal {
 		process.Stderr = session.ioBase + 1
 	}
 
@@ -339,7 +339,10 @@ func newcontainerHandler(vm *vm, hyper *api.Hyper, session *ioSession) error {
 		return err
 	}
 
-	relocateProcess(cmdIn.Process, session)
+	if err := relocateProcess(cmdIn.Process, session); err != nil {
+		return err
+	}
+
 	newData, err := json.Marshal(&cmdIn)
 	if err != nil {
 		return err
@@ -603,7 +606,7 @@ func (vm *vm) Close() {
 	// properly cleaning up all sessions.
 	vm.Lock()
 	for token := range vm.tokenToSession {
-		vm.freeTokenUnlocked(token)
+		_ = vm.freeTokenUnlocked(token)
 		delete(vm.tokenToSession, token)
 	}
 	vm.Unlock()

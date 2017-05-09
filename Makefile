@@ -46,7 +46,7 @@ cc-proxy: $(SOURCES)
 check: check-go-static check-go-test
 
 check-go-static:
-	.ci/go-static-checks.sh $(GO_STATIC_CHECKS_ARGS)
+	.ci/go-lint.sh
 
 check-go-test:
 	.ci/go-test.sh

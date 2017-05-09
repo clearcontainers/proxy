@@ -53,6 +53,8 @@ const (
 	TypeMax
 )
 
+const unknown = "unknown"
+
 // String implements Stringer for FrameType.
 func (t FrameType) String() string {
 	switch t {
@@ -65,7 +67,7 @@ func (t FrameType) String() string {
 	case TypeNotification:
 		return "notification"
 	default:
-		return "unknown"
+		return unknown
 	}
 }
 
@@ -112,7 +114,7 @@ func (t Command) String() string {
 	case CmdSignal:
 		return "Signal"
 	default:
-		return "unknown"
+		return unknown
 	}
 }
 
@@ -141,7 +143,7 @@ func (s Stream) String() string {
 	case StreamStderr:
 		return "stderr"
 	default:
-		return "unknown"
+		return unknown
 	}
 }
 
@@ -162,7 +164,7 @@ func (n Notification) String() string {
 	case NotificationProcessExited:
 		return "ProcessExited"
 	default:
-		return "unknown"
+		return unknown
 	}
 }
 

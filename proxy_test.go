@@ -16,7 +16,6 @@ package main
 
 import (
 	"encoding/json"
-	"flag"
 	"net"
 	"os"
 	"strings"
@@ -78,9 +77,6 @@ func (rig *testRig) Start() {
 
 	rig.startFds, err = rig.detector.Snapshot()
 	assert.Nil(rig.t, err)
-
-	initLogging()
-	flag.Parse()
 
 	// Start hyperstart go routine
 	rig.Hyperstart = mock.NewHyperstart(rig.t)

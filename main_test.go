@@ -16,11 +16,20 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"testing"
 )
 
 func TestMain(m *testing.M) {
+	logLevel := flag.String("log", "warn",
+		"log messages above specified level; one of debug, warn, error, fatal or panic")
+
 	flag.Parse()
+
+	if err := SetLoggingLevel(*logLevel); err != nil {
+		fmt.Fprint(os.Stderr, err)
+	}
+
 	os.Exit(m.Run())
 }

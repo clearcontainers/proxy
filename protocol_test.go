@@ -16,10 +16,8 @@ package main
 
 import (
 	"encoding/json"
-	"flag"
 	"io"
 	"net"
-	"os"
 	"sync"
 	"testing"
 
@@ -195,9 +193,4 @@ func TestCloseOnError(t *testing.T) {
 	assert.Equal(t, err, io.EOF)
 
 	server.Close()
-}
-
-func TestMain(m *testing.M) {
-	flag.Parse()
-	os.Exit(m.Run())
 }

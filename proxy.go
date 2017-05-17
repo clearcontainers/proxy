@@ -30,9 +30,8 @@ import (
 	"sync/atomic"
 	"syscall"
 
+	"github.com/Sirupsen/logrus"
 	"github.com/clearcontainers/proxy/api"
-
-	"github.com/golang/glog"
 )
 
 // tokenState  tracks if an I/O token has been claimed by a shim.
@@ -87,6 +86,8 @@ type client struct {
 
 	kind clientKind
 
+	log *logrus.Entry
+
 	// token and session are populated once a client has issued a successful
 	// Connectshim.
 	token   Token
@@ -109,25 +110,9 @@ func newClient(proxy *proxy, conn net.Conn) *client {
 		id:    id,
 		proxy: proxy,
 		conn:  conn,
+		log:   logrus.WithField("client", id),
 		kind:  clientKindRuntime,
 	}
-}
-
-func (c *client) info(lvl glog.Level, msg string) {
-	if !glog.V(lvl) {
-		return
-	}
-	glog.Infof("[client #%d] %s", c.id, msg)
-}
-
-func (c *client) infof(lvl glog.Level, fmt string, a ...interface{}) {
-	if !glog.V(lvl) {
-		return
-	}
-	a = append(a, 0)
-	copy(a[1:], a[0:])
-	a[0] = c.id
-	glog.Infof("[client #%d] "+fmt, a...)
 }
 
 func (proxy *proxy) allocateTokens(vm *vm, numIOStreams int) (*api.IOResponse, error) {
@@ -218,8 +203,7 @@ func registerVM(data []byte, userData interface{}, response *handlerResponse) {
 		return
 	}
 
-	client.infof(1,
-		"RegisterVM(containerId=%s,ctlSerial=%s,ioSerial=%s,console=%s)",
+	client.log.Infof("RegisterVM(containerId=%s,ctlSerial=%s,ioSerial=%s,console=%s)",
 		payload.ContainerID, payload.CtlSerial, payload.IoSerial,
 		payload.Console)
 
@@ -288,7 +272,7 @@ func attachVM(data []byte, userData interface{}, response *handlerResponse) {
 		response.AddResult("io", io)
 	}
 
-	client.infof(1, "AttachVM(containerId=%s)", payload.ContainerID)
+	client.log.Infof("AttachVM(containerId=%s)", payload.ContainerID)
 
 	client.vm = vm
 }
@@ -319,7 +303,7 @@ func unregisterVM(data []byte, userData interface{}, response *handlerResponse) 
 		return
 	}
 
-	client.info(1, "UnregisterVM()")
+	client.log.Info("UnregisterVM()")
 
 	proxy.Lock()
 	delete(proxy.vms, vm.containerID)
@@ -344,7 +328,7 @@ func hyper(data []byte, userData interface{}, response *handlerResponse) {
 		return
 	}
 
-	client.infof(1, "hyper(cmd=%s, data=%s)", hyper.HyperName, hyper.Data)
+	client.log.Infof("hyper(cmd=%s, data=%s)", hyper.HyperName, hyper.Data)
 
 	err := vm.SendMessage(&hyper)
 	response.SetError(err)
@@ -378,7 +362,7 @@ func connectShim(data []byte, userData interface{}, response *handlerResponse) {
 	client.token = token
 	client.session = session
 
-	client.infof(1, "ConnectShim(token=%s)", payload.Token)
+	client.log.Infof("ConnectShim(token=%s)", payload.Token)
 }
 
 // "disconnectShim"
@@ -406,7 +390,7 @@ func disconnectShim(data []byte, userData interface{}, response *handlerResponse
 	client.session = nil
 	client.token = ""
 
-	client.infof(1, "DisconnectShim()")
+	client.log.Infof("DisconnectShim()")
 }
 
 // "signal"
@@ -442,7 +426,7 @@ func signal(data []byte, userData interface{}, response *handlerResponse) {
 		return
 	}
 
-	client.infof(1, "Signal(%s,%d,%d)", signal, payload.Columns, payload.Rows)
+	client.log.Infof("Signal(%s,%d,%d)", signal, payload.Columns, payload.Rows)
 
 	var err error
 	if signal == syscall.SIGWINCH {
@@ -506,8 +490,7 @@ func (proxy *proxy) init() error {
 	var err error
 
 	// flags
-	v := flag.Lookup("v").Value.(flag.Getter).Get().(glog.Level)
-	proxy.enableVMConsole = v >= 3
+	proxy.enableVMConsole = logrus.GetLevel() == logrus.DebugLevel
 
 	// Open the proxy socket
 	proxy.socketPath = getSocketPath()
@@ -538,7 +521,7 @@ func (proxy *proxy) init() error {
 			return fmt.Errorf("couldn't set mode on socket: %v", err)
 		}
 
-		glog.V(1).Info("listening on ", proxy.socketPath)
+		logrus.Info("listening on ", proxy.socketPath)
 	}
 
 	proxy.listener = l
@@ -548,14 +531,14 @@ func (proxy *proxy) init() error {
 
 func (proxy *proxy) serveNewClient(proto *protocol, newConn net.Conn) {
 	newClient := newClient(proxy, newConn)
-	newClient.info(1, "client connected")
+	newClient.log.Info("client connected")
 
 	if err := proto.Serve(newConn, newClient); err != nil && err != io.EOF {
-		newClient.infof(1, "error serving client: %v", err)
+		newClient.log.Errorf("error serving client: %v", err)
 	}
 
 	newConn.Close()
-	newClient.info(1, "connection closed")
+	newClient.log.Info("connection closed")
 }
 
 func (proxy *proxy) serve() {
@@ -571,7 +554,7 @@ func (proxy *proxy) serve() {
 	proto.HandleCommand(api.CmdSignal, signal)
 	proto.HandleStream(forwardStdin)
 
-	glog.V(1).Info("proxy started")
+	logrus.Info("proxy started")
 
 	for {
 		conn, err := proxy.listener.Accept()
@@ -603,15 +586,26 @@ func proxyMain() {
 	proxy.wg.Wait()
 }
 
-func initLogging() {
-	// We print logs on stderr by default.
-	_ = flag.Set("logtostderr", "true")
+// SetLoggingLevel sets the logging level for the whole application. The values
+// accepted are: "debug", "info", "warn" (or "warning"), "error", "fatal" and
+// "panic".
+func SetLoggingLevel(l string) error {
+	levelStr := l
 
-	// It can be practical to use an environment variable to trigger a verbose output
-	level := os.Getenv("CC_PROXY_LOG_LEVEL")
-	if level != "" {
-		_ = flag.Set("v", level)
+	// It can be practical to use an environment variable to trigger a verbose
+	// output. The env variable always overrides what we are given.
+	env := os.Getenv("CC_PROXY_LOG_LEVEL")
+	if env != "" {
+		levelStr = env
 	}
+
+	level, err := logrus.ParseLevel(levelStr)
+	if err != nil {
+		return err
+	}
+
+	logrus.SetLevel(level)
+	return nil
 }
 
 type profiler struct {
@@ -627,7 +621,7 @@ func (p *profiler) setup() {
 
 	addr := fmt.Sprintf("%s:%d", p.host, p.port)
 	url := "http://" + addr + "/debug/pprof"
-	glog.V(1).Info("pprof enabled on " + url)
+	logrus.Info("pprof enabled on " + url)
 
 	go func() {
 		_ = http.ListenAndServe(addr, nil)
@@ -635,9 +629,10 @@ func (p *profiler) setup() {
 }
 
 func main() {
-	var pprof profiler
+	logLevel := flag.String("log", "warn",
+		"log messages above specified level; one of debug, warn, error, fatal or panic")
 
-	initLogging()
+	var pprof profiler
 
 	flag.BoolVar(&pprof.enabled, "pprof", false,
 		"enable pprof ")
@@ -647,7 +642,10 @@ func main() {
 		"port the pprof server will be bound to")
 
 	flag.Parse()
-	defer glog.Flush()
+
+	if err := SetLoggingLevel(*logLevel); err != nil {
+		logrus.Fatal(err)
+	}
 
 	pprof.setup()
 	proxyMain()

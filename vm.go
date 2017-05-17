@@ -25,10 +25,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Sirupsen/logrus"
 	"github.com/clearcontainers/proxy/api"
 
 	"github.com/containers/virtcontainers/pkg/hyperstart"
-	"github.com/golang/glog"
 )
 
 // Represents a single qemu/hyperstart instance on the system
@@ -36,6 +36,9 @@ type vm struct {
 	sync.Mutex
 
 	containerID string
+
+	logIO         *logrus.Entry
+	logHyperstart *logrus.Entry
 
 	hyperHandler *hyperstart.Hyperstart
 
@@ -102,8 +105,12 @@ const (
 func newVM(id, ctlSerial, ioSerial string) *vm {
 	h := hyperstart.NewHyperstart(ctlSerial, ioSerial, "unix")
 
+	log := logrus.WithFields(logrus.Fields{"vm": id})
+
 	vm := &vm{
 		containerID:    id,
+		logIO:          log.WithField("section", "io"),
+		logHyperstart:  log.WithField("section", "hyperstart"),
 		hyperHandler:   h,
 		nextIoBase:     firstIoBase,
 		ioSessions:     make(map[uint64]*ioSession),
@@ -138,29 +145,11 @@ func (vm *vm) shortName() string {
 	return vm.containerID[0:length]
 }
 
-func (vm *vm) info(lvl glog.Level, channel string, msg string) {
-	if !glog.V(lvl) {
+func (vm *vm) dump(data []byte) {
+	if logrus.GetLevel() != logrus.DebugLevel {
 		return
 	}
-	glog.Infof("[vm %s %s] %s", vm.shortName(), channel, msg)
-}
-
-func (vm *vm) infof(lvl glog.Level, channel string, fmt string, a ...interface{}) {
-	if !glog.V(lvl) {
-		return
-	}
-	a = append(a, 0, 0)
-	copy(a[2:], a[0:])
-	a[0] = vm.shortName()
-	a[1] = channel
-	glog.Infof("[vm %s %s] "+fmt, a...)
-}
-
-func (vm *vm) dump(lvl glog.Level, data []byte) {
-	if !glog.V(lvl) {
-		return
-	}
-	glog.Infof("\n%s", hex.Dump(data))
+	logrus.WithField("wm", vm.containerID).Debug("\n%s", hex.Dump(data))
 }
 
 func (vm *vm) findSessionBySeq(seq uint64) *ioSession {
@@ -214,8 +203,8 @@ func (vm *vm) ioHyperToClients() {
 
 		// The nullSession acts like /dev/null, discard data associated with it
 		if session == &vm.nullSession {
-			vm.info(1, "io", "data received for the null session, discarding")
-			vm.dump(2, msg.Message)
+			vm.logIO.Info("data received for the null session, discarding")
+			vm.dump(msg.Message)
 			continue
 		}
 
@@ -228,15 +217,15 @@ func (vm *vm) ioHyperToClients() {
 			continue
 		}
 
-		vm.infof(1, "io", "<- writing to client #%d", session.clientID)
-		vm.dump(2, msg.Message)
+		vm.logIO.Debugf("<- writing to client #%d", session.clientID)
+		vm.dump(msg.Message)
 
 		frame := hyperstartTtyMessageToFrame(msg, session)
 		err = api.WriteFrame(session.client, frame)
 		if err != nil {
 			// When the shim is forcefully killed, it's possible we
 			// still have data to write. Ignore errors for that case.
-			vm.infof(1, "io", "error writing I/O data to client:", err)
+			vm.logIO.Errorf("error writing I/O data to client: %v", err)
 			continue
 		}
 	}
@@ -256,7 +245,7 @@ func (vm *vm) consoleToLog() {
 			break
 		}
 
-		vm.infof(3, "hyperstart", line)
+		vm.logHyperstart.Debug(line)
 	}
 
 	vm.wg.Done()
@@ -429,7 +418,7 @@ var waitForShimTimeout = 30 * time.Second
 // itself with the proxy. If the shim has already done so, WaitForSim will
 // return immediately.
 func (session *ioSession) WaitForShim() error {
-	session.vm.infof(1, "session",
+	session.vm.logIO.Infof(
 		"waiting for shim to register itself with token %s (timeout %s)",
 		session.token, waitForShimTimeout)
 
@@ -458,8 +447,8 @@ func (session *ioSession) ForwardStdin(frame *api.Frame) error {
 		Message: frame.Payload,
 	}
 
-	vm.infof(1, "io", "-> writing to hyper from #%d", session.clientID)
-	vm.dump(2, msg.Message)
+	vm.logIO.Infof("-> writing to hyper from #%d", session.clientID)
+	vm.dump(msg.Message)
 
 	return vm.hyperHandler.SendIoMessage(msg)
 }

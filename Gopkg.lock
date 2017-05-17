@@ -1,4 +1,4 @@
-memo = "2129c8907978e092ff29d6ac7fe5da4949c6da13f36e6d795b370339c75ac3d4"
+memo = "a7ed328dcfd5b65a8cd7568c7dfcb150b37fdb3d4b0924bb4f5de4e51c09cd5b"
 
 [[projects]]
   name = "github.com/Sirupsen/logrus"
@@ -16,12 +16,6 @@ memo = "2129c8907978e092ff29d6ac7fe5da4949c6da13f36e6d795b370339c75ac3d4"
   packages = ["spew"]
   revision = "346938d642f2ec3594ed81d874461961cd0faa76"
   version = "v1.1.0"
-
-[[projects]]
-  branch = "master"
-  name = "github.com/golang/glog"
-  packages = ["."]
-  revision = "23def4e6c14b4da8ac2ed8007337bc5eb5007998"
 
 [[projects]]
   name = "github.com/pmezard/go-difflib"

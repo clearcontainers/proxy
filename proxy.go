@@ -103,10 +103,10 @@ func newClient(proxy *proxy, conn net.Conn) *client {
 	// identify connections.  This ID needs to be unique.  To ensure
 	// this, the ID is first incremented and then assigned to prevent
 	// two peers from having the same ID.
-	atomic.AddUint64(&nextClientID, 1)
+	id := atomic.AddUint64(&nextClientID, 1)
 
 	return &client{
-		id:    nextClientID,
+		id:    id,
 		proxy: proxy,
 		conn:  conn,
 		kind:  clientKindRuntime,

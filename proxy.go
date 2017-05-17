@@ -95,6 +95,24 @@ type client struct {
 	conn net.Conn
 }
 
+var nextClientID = uint64(0)
+
+func newClient(proxy *proxy, conn net.Conn) *client {
+	// Unfortunately it's hard to find out information on the peer
+	// at the other end of a unix socket. We use a per-client ID to
+	// identify connections.  This ID needs to be unique.  To ensure
+	// this, the ID is first incremented and then assigned to prevent
+	// two peers from having the same ID.
+	id := atomic.AddUint64(&nextClientID, 1)
+
+	return &client{
+		id:    id,
+		proxy: proxy,
+		conn:  conn,
+		kind:  clientKindRuntime,
+	}
+}
+
 func (c *client) info(lvl glog.Level, msg string) {
 	if !glog.V(lvl) {
 		return
@@ -528,23 +546,8 @@ func (proxy *proxy) init() error {
 	return nil
 }
 
-var nextClientID = uint64(0)
-
 func (proxy *proxy) serveNewClient(proto *protocol, newConn net.Conn) {
-	// Unfortunately it's hard to find out information on the peer
-	// at the other end of a unix socket. We use a per-client ID to
-	// identify connections.  This ID needs to be unique.  To ensure
-	// this, the ID is first incremented and then assigned to prevent
-	// two peers from having the same ID.
-	atomic.AddUint64(&nextClientID, 1)
-
-	newClient := &client{
-		id:    nextClientID,
-		proxy: proxy,
-		conn:  newConn,
-		kind:  clientKindRuntime,
-	}
-
+	newClient := newClient(proxy, newConn)
 	newClient.info(1, "client connected")
 
 	if err := proto.Serve(newConn, newClient); err != nil && err != io.EOF {

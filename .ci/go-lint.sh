@@ -7,7 +7,7 @@ set -o pipefail
 if [ ! $(command -v gometalinter) ]
 then
 	go get github.com/alecthomas/gometalinter
-	gometalinter --install --vendor
+	gometalinter --install --vendor --debug
 fi
 
 gometalinter \

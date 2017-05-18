@@ -167,7 +167,7 @@ func (vm *vm) dump(data []byte) {
 	if logrus.GetLevel() != logrus.DebugLevel {
 		return
 	}
-	logrus.WithField("wm", vm.containerID).Debug("\n%s", hex.Dump(data))
+	logrus.WithField("wm", vm.containerID).Debug("\n", hex.Dump(data))
 }
 
 func (vm *vm) findSessionBySeq(seq uint64) *ioSession {

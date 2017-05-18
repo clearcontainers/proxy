@@ -569,7 +569,7 @@ func (proxy *proxy) serve() {
 	proto.HandleCommand(api.CmdConnectShim, connectShim)
 	proto.HandleCommand(api.CmdDisconnectShim, disconnectShim)
 	proto.HandleCommand(api.CmdSignal, signal)
-	proto.HandleStream(forwardStdin)
+	proto.HandleStream(api.StreamStdin, forwardStdin)
 
 	logrus.Info("proxy started")
 

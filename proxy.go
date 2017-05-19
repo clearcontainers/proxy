@@ -457,6 +457,78 @@ func forwardStdin(frame *api.Frame, userData interface{}) error {
 	return client.session.ForwardStdin(frame)
 }
 
+func isOneOf(s string, candidates []string) bool {
+	for _, c := range candidates {
+		if s == c {
+			return true
+		}
+	}
+	return false
+}
+
+// We only accept shim or runtime sources from the log API
+var validSources = []string{"shim", "runtime"}
+
+// We only accept levels that do not have the consequence of terminating a process.
+var validLevels = []string{"debug", "info", "warn", "error"}
+
+func validateLogEntry(payload *api.LogEntry) error {
+	if !isOneOf(payload.Source, validSources) {
+		return fmt.Errorf("invalid source: %s", payload.Source)
+	}
+
+	if !isOneOf(payload.Level, validLevels) {
+		return fmt.Errorf("invalid level: %s", payload.Level)
+	}
+
+	if payload.Message == "" {
+		return errors.New("no message specified")
+	}
+
+	return nil
+}
+
+func handleLogEntry(frame *api.Frame, userData interface{}) error {
+	client := userData.(*client)
+
+	payload := api.LogEntry{}
+	if err := json.Unmarshal(frame.Payload, &payload); err != nil {
+		return err
+	}
+
+	if err := validateLogEntry(&payload); err != nil {
+		return err
+	}
+
+	// we ready checked that Level is a valid logrus level above
+	level, _ := logrus.ParseLevel(payload.Level)
+
+	var fields logrus.Fields
+	if payload.ContainerID == "" {
+		fields = logrus.Fields{
+			"source": payload.Source,
+		}
+	} else {
+		fields = logrus.Fields{
+			"source":    payload.Source,
+			"container": payload.ContainerID,
+		}
+	}
+
+	switch level {
+	case logrus.DebugLevel:
+		client.log.WithFields(fields).Debug(payload.Message)
+	case logrus.InfoLevel:
+		client.log.WithFields(fields).Info(payload.Message)
+	case logrus.WarnLevel:
+		client.log.WithFields(fields).Warn(payload.Message)
+	case logrus.ErrorLevel:
+		client.log.WithFields(fields).Error(payload.Message)
+	}
+
+	return nil
+}
+
 func newProxy() *proxy {
 	return &proxy{
 		vms:       make(map[string]*vm),
@@ -570,6 +642,7 @@ func (proxy *proxy) serve() {
 	proto.HandleCommand(api.CmdDisconnectShim, disconnectShim)
 	proto.HandleCommand(api.CmdSignal, signal)
 	proto.HandleStream(api.StreamStdin, forwardStdin)
+	proto.HandleStream(api.StreamLog, handleLogEntry)
 
 	logrus.Info("proxy started")
 

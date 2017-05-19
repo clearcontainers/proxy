@@ -37,7 +37,8 @@ type testRig struct {
 	wg sync.WaitGroup
 
 	// hyperstart mocking
-	Hyperstart *mock.Hyperstart
+	runHyperstart bool
+	Hyperstart    *mock.Hyperstart
 
 	// proxy, in process
 	proxy      *proxy
@@ -64,11 +65,16 @@ func newTestRig(t *testing.T) *testRig {
 	proto.HandleStream(api.StreamStdin, forwardStdin)
 
 	return &testRig{
-		t:        t,
-		protocol: proto,
-		proxy:    newProxy(),
-		detector: NewFdLeadDetector(),
+		t:             t,
+		protocol:      proto,
+		proxy:         newProxy(),
+		runHyperstart: true,
+		detector:      NewFdLeadDetector(),
 	}
+}
+
+func (rig *testRig) SetRunHyperstart(run bool) {
+	rig.runHyperstart = run
 }
 
 func (rig *testRig) Start() {
@@ -78,15 +84,18 @@ func (rig *testRig) Start() {
 	assert.Nil(rig.t, err)
 
 	// Start hyperstart go routine
-	rig.Hyperstart = mock.NewHyperstart(rig.t)
-	rig.Hyperstart.Start()
+	if rig.runHyperstart {
+		rig.Hyperstart = mock.NewHyperstart(rig.t)
+		rig.Hyperstart.Start()
 
-	// Explicitly send READY message from hyperstart mock
-	rig.wg.Add(1)
-	go func() {
-		rig.Hyperstart.SendMessage(int(hyperstart.ReadyCode), []byte{})
-		rig.wg.Done()
-	}()
+		// Explicitly send READY message from hyperstart mock
+		rig.wg.Add(1)
+		go func() {
+			rig.Hyperstart.SendMessage(int(hyperstart.ReadyCode), []byte{})
+			rig.wg.Done()
+		}()
+
+	}
 
 	// Client object that can be used to issue proxy commands
 	clientConn := rig.ServeNewClient()
@@ -102,7 +111,9 @@ func (rig *testRig) Stop() {
 		conn.Close()
 	}
 
-	rig.Hyperstart.Stop()
+	if rig.runHyperstart {
+		rig.Hyperstart.Stop()
+	}
 
 	rig.wg.Wait()
 

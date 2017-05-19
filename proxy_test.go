@@ -99,7 +99,7 @@ func (rig *testRig) Start() {
 
 	// Client object that can be used to issue proxy commands
 	clientConn := rig.ServeNewClient()
-	rig.Client = goapi.NewClient(clientConn.(*net.UnixConn))
+	rig.Client = goapi.NewClient(clientConn)
 }
 
 func (rig *testRig) Stop() {

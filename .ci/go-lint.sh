@@ -14,6 +14,8 @@ gometalinter \
 	--exclude='error return value not checked.*(Close|Log|Print).*\(errcheck\)$' \
 	--exclude='.*_test\.go:.*error return value not checked.*\(errcheck\)$' \
 	--exclude='duplicate of.*_test.go.*\(dupl\)$' \
+	--exclude='client.go:.*level can be fmt.Stringer' \
+	--exclude='client.go:.*source can be fmt.Stringer' \
 	--disable=aligncheck \
 	--disable=gotype \
 	--disable=gas \

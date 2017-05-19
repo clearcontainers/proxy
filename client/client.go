@@ -301,3 +301,12 @@ func (client *Client) Kill(signal syscall.Signal) error {
 func (client *Client) SendTerminalSize(columns, rows int) error {
 	return client.signal(syscall.SIGWINCH, columns, rows)
 }
+
+func (client *Client) sendStream(op api.Stream, data []byte) error {
+	return api.WriteStream(client.conn, op, data)
+}
+
+// SendStdin sends stdin data. This can only be used from shim clients.
+func (client *Client) SendStdin(data []byte) error {
+	return client.sendStream(api.StreamStdin, data)
+}

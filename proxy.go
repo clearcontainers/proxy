@@ -428,6 +428,12 @@ func signal(data []byte, userData interface{}, response *handlerResponse) {
 
 	client.log.Infof("Signal(%s,%d,%d)", signal, payload.Columns, payload.Rows)
 
+	// Wait for the process inside the VM to be started if needed.
+	if err := session.WaitForProcess(false); err != nil {
+		response.SetError(err)
+		return
+	}
+
 	var err error
 	if signal == syscall.SIGWINCH {
 		err = session.SendTerminalSize(payload.Columns, payload.Rows)
@@ -535,6 +541,17 @@ func (proxy *proxy) serveNewClient(proto *protocol, newConn net.Conn) {
 
 	if err := proto.Serve(newConn, newClient); err != nil && err != io.EOF {
 		newClient.log.Errorf("error serving client: %v", err)
+	}
+
+	// The client was a shim with a session still alive. This means DisconnectShim
+	// hasn't been called and we're closing the connection because of an error
+	// (either us or the shim has closed the connection). We want to keep the
+	// session alive and hope a shim will reconnect claiming the same token.
+	if newClient.session != nil {
+		proxy.Lock()
+		info := proxy.tokenToVM[newClient.token]
+		info.state = tokenStateAllocated
+		proxy.Unlock()
 	}
 
 	newConn.Close()

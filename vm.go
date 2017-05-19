@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -94,6 +95,11 @@ type ioSession struct {
 	// commands newcontainer and execcmd will wait for the shim to be ready
 	// before forwarding the command to hyperstart)
 	shimConnected chan interface{}
+
+	// Channel to signal the process corresponding to that session has been
+	// started. This is used to stop the shim from sending stdin data to a
+	// non-existent process.
+	processStarted chan interface{}
 }
 
 const (
@@ -119,10 +125,11 @@ func newVM(id, ctlSerial, ioSerial string) *vm {
 	}
 
 	vm.nullSession = ioSession{
-		vm:            vm,
-		nStreams:      2,
-		ioBase:        nullSessionStdout,
-		shimConnected: make(chan interface{}),
+		vm:             vm,
+		nStreams:       2,
+		ioBase:         nullSessionStdout,
+		shimConnected:  make(chan interface{}),
+		processStarted: make(chan interface{}),
 	}
 	vm.ioSessions[nullSessionStdout] = &vm.nullSession
 	vm.ioSessions[nullSessionStderr] = &vm.nullSession
@@ -130,6 +137,17 @@ func newVM(id, ctlSerial, ioSerial string) *vm {
 	close(vm.nullSession.shimConnected)
 
 	return vm
+}
+
+// ResetShim resets the session state related to the shim. Call this when we
+// lose the connection to the shim, whether we close it ourselves or the shim
+// crashes and the connection is closed.
+func (session *ioSession) ResetShim() {
+	session.vm.logIO.Debug("lost the shim for %s", session.token)
+	if session == &session.vm.nullSession {
+		return
+	}
+	session.shimConnected = make(chan interface{})
 }
 
 // setConsole() will make the proxy output the console data on stderr
@@ -342,11 +360,16 @@ func newcontainerHandler(vm *vm, hyper *api.Hyper, session *ioSession) error {
 	return nil
 }
 
-// RelocateHyperCommand performs the sequence number relocation in the
+// relocateHyperCommand performs the sequence number relocation in the
 // newcontainer and execcmd hyper commands given the corresponding list of
 // tokens. Starpod isn't handled as it's not currently use to start processes
 // and indicated as deprecated in the hyperstart API.
-func (vm *vm) relocateHyperCommand(hyper *api.Hyper) error {
+// relocateHyperCommand will return the Session of the process in question if
+// the hyper command needed a relocation. This is the same thing as saying if
+// the hyper command is either newcontainer or execcmd.
+func (vm *vm) relocateHyperCommand(hyper *api.Hyper) (*ioSession, error) {
+	var session *ioSession
+
 	cmds := []struct {
 		name    string
 		handler relocationHandler
@@ -361,10 +384,9 @@ func (vm *vm) relocateHyperCommand(hyper *api.Hyper) error {
 	for _, cmd := range cmds {
 		if hyper.HyperName == cmd.name {
 			if nTokens > 1 {
-				return fmt.Errorf("expected 0 or 1 token, got %d", nTokens)
+				return nil, fmt.Errorf("expected 0 or 1 token, got %d", nTokens)
 			}
 
-			var session *ioSession
 			if nTokens == 0 {
 				// When not given any token, we use the nullSession and will discard data
 				// received from hyper
@@ -373,18 +395,18 @@ func (vm *vm) relocateHyperCommand(hyper *api.Hyper) error {
 				token := hyper.Tokens[0]
 				session = vm.findSessionByToken(Token(token))
 				if session == nil {
-					return fmt.Errorf("unknown token %s", token)
+					return nil, fmt.Errorf("unknown token %s", token)
 				}
 			}
 
 			if err := cmd.handler(vm, hyper, session); err != nil {
-				return err
+				return nil, err
 			}
 
 			// Wait for the corresponding shim to be registered with the proxy so we can
 			// start forwarding data as soon as we receive it
 			if err := session.WaitForShim(); err != nil {
-				return err
+				return nil, err
 			}
 
 			needsRelocation = true
@@ -395,20 +417,28 @@ func (vm *vm) relocateHyperCommand(hyper *api.Hyper) error {
 	// If a hyper command doesn't need a token but one is given anyway, reject the
 	// command.
 	if !needsRelocation && nTokens > 0 {
-		return fmt.Errorf("%s doesn't need tokens but %d token(s) were given",
+		return nil, fmt.Errorf("%s doesn't need tokens but %d token(s) were given",
 			hyper.HyperName, nTokens)
 
 	}
 
-	return nil
+	return session, nil
 }
 
-func (vm *vm) SendMessage(hyper *api.Hyper) error {
-	if err := vm.relocateHyperCommand(hyper); err != nil {
+func (vm *vm) SendMessage(hyper *api.Hyper) (err error) {
+	var session *ioSession
+
+	if session, err = vm.relocateHyperCommand(hyper); err != nil {
 		return err
 	}
 
-	_, err := vm.hyperHandler.SendCtlMessage(hyper.HyperName, hyper.Data)
+	_, err = vm.hyperHandler.SendCtlMessage(hyper.HyperName, hyper.Data)
+
+	if session != nil {
+		// We have now started the process inside the VM, let the shim send stdin
+		// data and signals.
+		close(session.processStarted)
+	}
 	return err
 }
 
@@ -425,8 +455,39 @@ func (session *ioSession) WaitForShim() error {
 	select {
 	case <-session.shimConnected:
 	case <-time.After(waitForShimTimeout):
-		return fmt.Errorf("timeout waiting for shim with token %s", session.token)
+		msg := fmt.Sprintf("timeout waiting for shim with token %s", session.token)
+		session.vm.logIO.Error(msg)
+		// No need to call session.ResetShim() here. We time out because we haven't
+		// seen a shim. This error will be reported to the runtime.
+		return errors.New(msg)
 	}
+
+	return nil
+}
+
+var waitForProcessTimeout = 30 * time.Second
+
+// WaitForProcess will wait until the process inside the VM is fully started. If
+// it's already the case, WaitForProcess will return immediately.
+// shouldReset controls if we should reset the internal shim state on timeout.
+// It should be set to true in code path that will close the shim connection on
+// timeout.
+func (session *ioSession) WaitForProcess(shouldReset bool) error {
+	session.vm.logIO.Infof("waiting for runtime to execute the process for token %s (timeout %s)",
+		session.token, waitForProcessTimeout)
+
+	select {
+	case <-session.processStarted:
+	case <-time.After(waitForProcessTimeout):
+		// Runtime failed to do a newcontainer or execcmd.
+		msg := fmt.Sprintf("timeout waiting for process with token %s", session.token)
+		session.vm.logIO.Error(msg)
+		if shouldReset {
+			session.ResetShim()
+		}
+		return errors.New(msg)
+	}
+
 	return nil
 }
 
@@ -439,6 +500,10 @@ func (session *ioSession) ForwardStdin(frame *api.Frame) error {
 	streamType := api.Stream(frame.Header.Opcode)
 	if streamType != api.StreamStdin {
 		return fmt.Errorf("expected stdin stream frame got %s", streamType)
+	}
+
+	if err := session.WaitForProcess(true); err != nil {
+		return err
 	}
 
 	vm := session.vm
@@ -512,11 +577,12 @@ func (vm *vm) AllocateToken() (Token, error) {
 	}
 
 	session := &ioSession{
-		vm:            vm,
-		token:         token,
-		nStreams:      nStreams,
-		ioBase:        ioBase,
-		shimConnected: make(chan interface{}),
+		vm:             vm,
+		token:          token,
+		nStreams:       nStreams,
+		ioBase:         ioBase,
+		shimConnected:  make(chan interface{}),
+		processStarted: make(chan interface{}),
 	}
 
 	// This mapping is to get the session from the seq number in an

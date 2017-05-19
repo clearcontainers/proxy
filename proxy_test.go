@@ -20,16 +20,15 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/clearcontainers/proxy/api"
 	goapi "github.com/clearcontainers/proxy/client"
+	"github.com/containers/virtcontainers/pkg/hyperstart"
 	"github.com/containers/virtcontainers/pkg/hyperstart/mock"
 
-	"syscall"
-
-	"github.com/containers/virtcontainers/pkg/hyperstart"
 	"github.com/stretchr/testify/assert"
 )
 

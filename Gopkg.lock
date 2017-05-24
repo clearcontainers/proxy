@@ -1,8 +1,8 @@
-memo = "a7ed328dcfd5b65a8cd7568c7dfcb150b37fdb3d4b0924bb4f5de4e51c09cd5b"
+memo = "1deea5082a90ba9354cb673741e7fe51536ec1e85cd5653a96bf07da354c8647"
 
 [[projects]]
   name = "github.com/Sirupsen/logrus"
-  packages = ["."]
+  packages = [".","hooks/test"]
   revision = "ba1b36c82c5e05c4f912a88eab0dcd91a171688f"
   version = "v0.11.5"
 

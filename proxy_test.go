@@ -20,16 +20,17 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/Sirupsen/logrus"
+	"github.com/Sirupsen/logrus/hooks/test"
 	"github.com/clearcontainers/proxy/api"
 	goapi "github.com/clearcontainers/proxy/client"
+	"github.com/containers/virtcontainers/pkg/hyperstart"
 	"github.com/containers/virtcontainers/pkg/hyperstart/mock"
 
-	"syscall"
-
-	"github.com/containers/virtcontainers/pkg/hyperstart"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -38,7 +39,8 @@ type testRig struct {
 	wg sync.WaitGroup
 
 	// hyperstart mocking
-	Hyperstart *mock.Hyperstart
+	runHyperstart bool
+	Hyperstart    *mock.Hyperstart
 
 	// proxy, in process
 	proxy      *proxy
@@ -62,14 +64,20 @@ func newTestRig(t *testing.T) *testRig {
 	proto.HandleCommand(api.CmdConnectShim, connectShim)
 	proto.HandleCommand(api.CmdDisconnectShim, disconnectShim)
 	proto.HandleCommand(api.CmdSignal, signal)
-	proto.HandleStream(forwardStdin)
+	proto.HandleStream(api.StreamStdin, forwardStdin)
+	proto.HandleStream(api.StreamLog, handleLogEntry)
 
 	return &testRig{
-		t:        t,
-		protocol: proto,
-		proxy:    newProxy(),
-		detector: NewFdLeadDetector(),
+		t:             t,
+		protocol:      proto,
+		proxy:         newProxy(),
+		runHyperstart: true,
+		detector:      NewFdLeadDetector(),
 	}
+}
+
+func (rig *testRig) SetRunHyperstart(run bool) {
+	rig.runHyperstart = run
 }
 
 func (rig *testRig) Start() {
@@ -79,19 +87,22 @@ func (rig *testRig) Start() {
 	assert.Nil(rig.t, err)
 
 	// Start hyperstart go routine
-	rig.Hyperstart = mock.NewHyperstart(rig.t)
-	rig.Hyperstart.Start()
+	if rig.runHyperstart {
+		rig.Hyperstart = mock.NewHyperstart(rig.t)
+		rig.Hyperstart.Start()
 
-	// Explicitly send READY message from hyperstart mock
-	rig.wg.Add(1)
-	go func() {
-		rig.Hyperstart.SendMessage(int(hyperstart.ReadyCode), []byte{})
-		rig.wg.Done()
-	}()
+		// Explicitly send READY message from hyperstart mock
+		rig.wg.Add(1)
+		go func() {
+			rig.Hyperstart.SendMessage(int(hyperstart.ReadyCode), []byte{})
+			rig.wg.Done()
+		}()
+
+	}
 
 	// Client object that can be used to issue proxy commands
 	clientConn := rig.ServeNewClient()
-	rig.Client = goapi.NewClient(clientConn.(*net.UnixConn))
+	rig.Client = goapi.NewClient(clientConn)
 }
 
 func (rig *testRig) Stop() {
@@ -103,7 +114,9 @@ func (rig *testRig) Stop() {
 		conn.Close()
 	}
 
-	rig.Hyperstart.Stop()
+	if rig.runHyperstart {
+		rig.Hyperstart.Stop()
+	}
 
 	rig.wg.Wait()
 
@@ -118,6 +131,12 @@ func (rig *testRig) Stop() {
 
 	assert.True(rig.t,
 		rig.detector.Compare(os.Stdout, rig.startFds, rig.stopFds))
+}
+
+// SyncWithProxy can be used to make sure the goroutine serving the proxy has
+// processed all frames sent up to this point.
+func SyncWithProxy(client *goapi.Client) {
+	_, _ = client.AttachVM("non-existing-id", nil)
 }
 
 // RegisterVM registers a new VM, returning 1 token that can be used by a shim.
@@ -744,5 +763,57 @@ func TestShimSendStdinAfterExeccmd(t *testing.T) {
 
 	// Cleanup
 	shim.close()
+	rig.Stop()
+}
+
+func TestValidateLogEntry(t *testing.T) {
+	tests := []struct {
+		payload api.LogEntry
+		valid   bool
+	}{
+		// Invalid source.
+		{api.LogEntry{Source: "foo"}, false},
+		// Can't log with hyperstart/proxy/qemu sources from client API
+		{api.LogEntry{Source: "hyperstart"}, false},
+		{api.LogEntry{Source: "proxy"}, false},
+		{api.LogEntry{Source: "qemu"}, false},
+		// No empty messages.
+		{api.LogEntry{Source: "shim", Level: "warn"}, false},
+		{api.LogEntry{Source: "shim", Level: "warn"}, false},
+		// Invalid Levels.
+		{api.LogEntry{Source: "shim", Level: "garbage", Message: "foo"}, false},
+		{api.LogEntry{Source: "shim", Level: "fatal", Message: "foo"}, false},
+		{api.LogEntry{Source: "shim", Level: "panic", Message: "foo"}, false},
+		// One that works!
+		{api.LogEntry{Source: "shim", Level: "warn", Message: "Something bad happened"}, true},
+	}
+
+	for _, test := range tests {
+		err := validateLogEntry(&test.payload)
+		t.Log(test)
+		if test.valid {
+			assert.Nil(t, err)
+			continue
+		}
+		assert.NotNil(t, err)
+	}
+}
+
+func TestLog(t *testing.T) {
+	rig := newTestRig(t)
+	rig.SetRunHyperstart(false)
+	rig.Start()
+
+	const warningMessage = "A warning!"
+	hook := test.NewGlobal()
+	rig.Client.Log(goapi.LogLevelWarn, goapi.LogSourceShim, testContainerID, warningMessage)
+
+	SyncWithProxy(rig.Client)
+
+	entry := hook.LastEntry()
+	assert.NotNil(t, entry)
+	assert.Equal(t, logrus.WarnLevel, entry.Level)
+	assert.Equal(t, warningMessage, entry.Message)
+
 	rig.Stop()
 }

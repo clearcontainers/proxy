@@ -167,7 +167,7 @@ func (vm *vm) dump(data []byte) {
 	if logrus.GetLevel() != logrus.DebugLevel {
 		return
 	}
-	logrus.WithField("wm", vm.containerID).Debug("\n%s", hex.Dump(data))
+	logrus.WithField("wm", vm.containerID).Debug("\n", hex.Dump(data))
 }
 
 func (vm *vm) findSessionBySeq(seq uint64) *ioSession {
@@ -493,15 +493,6 @@ func (session *ioSession) WaitForProcess(shouldReset bool) error {
 
 // ForwardStdin forwards an api.Frame with stdin data to hyperstart
 func (session *ioSession) ForwardStdin(frame *api.Frame) error {
-	if frame.Header.Type != api.TypeStream {
-		return fmt.Errorf("expected stream frame got %s", frame.Header.Type)
-	}
-
-	streamType := api.Stream(frame.Header.Opcode)
-	if streamType != api.StreamStdin {
-		return fmt.Errorf("expected stdin stream frame got %s", streamType)
-	}
-
 	if err := session.WaitForProcess(true); err != nil {
 		return err
 	}

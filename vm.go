@@ -38,8 +38,8 @@ type vm struct {
 
 	containerID string
 
-	logIO         *logrus.Entry
-	logHyperstart *logrus.Entry
+	logIO   *logrus.Entry
+	logQemu *logrus.Entry
 
 	hyperHandler *hyperstart.Hyperstart
 
@@ -116,7 +116,7 @@ func newVM(id, ctlSerial, ioSerial string) *vm {
 	vm := &vm{
 		containerID:    id,
 		logIO:          log.WithField("section", "io"),
-		logHyperstart:  log.WithField("section", "hyperstart"),
+		logQemu:        log.WithField("source", "qemu"),
 		hyperHandler:   h,
 		nextIoBase:     firstIoBase,
 		ioSessions:     make(map[uint64]*ioSession),
@@ -258,7 +258,7 @@ func (vm *vm) ioHyperToClients() {
 func (vm *vm) consoleToLog() {
 	scanner := bufio.NewScanner(vm.console.conn)
 	for scanner.Scan() {
-		vm.logHyperstart.Debug(scanner.Text())
+		vm.logQemu.Debug(scanner.Text())
 	}
 
 	vm.wg.Done()

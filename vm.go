@@ -167,6 +167,11 @@ func (vm *vm) dump(data []byte) {
 	if logrus.GetLevel() != logrus.DebugLevel {
 		return
 	}
+
+	if len(data) == 0 {
+		return
+	}
+
 	logrus.WithField("wm", vm.containerID).Debug("\n", hex.Dump(data))
 }
 

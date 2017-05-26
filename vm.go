@@ -256,14 +256,9 @@ func (vm *vm) ioHyperToClients() {
 
 // Stream the VM console to stderr
 func (vm *vm) consoleToLog() {
-	reader := bufio.NewReader(vm.console.conn)
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			break
-		}
-
-		vm.logHyperstart.Debug(line)
+	scanner := bufio.NewScanner(vm.console.conn)
+	for scanner.Scan() {
+		vm.logHyperstart.Debug(scanner.Text())
 	}
 
 	vm.wg.Done()

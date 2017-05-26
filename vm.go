@@ -111,7 +111,7 @@ const (
 func newVM(id, ctlSerial, ioSerial string) *vm {
 	h := hyperstart.NewHyperstart(ctlSerial, ioSerial, "unix")
 
-	log := logrus.WithFields(logrus.Fields{"vm": id})
+	log := proxyLog.WithFields(logrus.Fields{"vm": id})
 
 	vm := &vm{
 		containerID:    id,
@@ -172,7 +172,7 @@ func (vm *vm) dump(data []byte) {
 		return
 	}
 
-	logrus.WithField("wm", vm.containerID).Debug("\n", hex.Dump(data))
+	proxyLog.WithField("wm", vm.containerID).Debug("\n", hex.Dump(data))
 }
 
 func (vm *vm) findSessionBySeq(seq uint64) *ioSession {

@@ -48,6 +48,11 @@ type tokenInfo struct {
 	vm    *vm
 }
 
+// proxyLog is the general logger the proxy. More specialized loggers can be
+// found in objects (specialized means with already pre-defined fields). Use
+// proxyLog for proxy message that shouldn't use a specialized one.
+var proxyLog = logrus.WithField("source", "proxy")
+
 // Main struct holding the proxy state
 type proxy struct {
 	// Protect concurrent accesses from separate client goroutines to this
@@ -110,7 +115,7 @@ func newClient(proxy *proxy, conn net.Conn) *client {
 		id:    id,
 		proxy: proxy,
 		conn:  conn,
-		log:   logrus.WithField("client", id),
+		log:   proxyLog.WithField("client", id),
 		kind:  clientKindRuntime,
 	}
 }
@@ -599,7 +604,7 @@ func (proxy *proxy) init() error {
 			return fmt.Errorf("couldn't set mode on socket: %v", err)
 		}
 
-		logrus.Info("listening on ", proxy.socketPath)
+		proxyLog.Info("listening on ", proxy.socketPath)
 	}
 
 	proxy.listener = l
@@ -644,7 +649,7 @@ func (proxy *proxy) serve() {
 	proto.HandleStream(api.StreamStdin, forwardStdin)
 	proto.HandleStream(api.StreamLog, handleLogEntry)
 
-	logrus.Info("proxy started")
+	proxyLog.Info("proxy started")
 
 	for {
 		conn, err := proxy.listener.Accept()
@@ -711,7 +716,7 @@ func (p *profiler) setup() {
 
 	addr := fmt.Sprintf("%s:%d", p.host, p.port)
 	url := "http://" + addr + "/debug/pprof"
-	logrus.Info("pprof enabled on " + url)
+	proxyLog.Info("pprof enabled on " + url)
 
 	go func() {
 		_ = http.ListenAndServe(addr, nil)

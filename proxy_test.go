@@ -813,6 +813,8 @@ func TestLog(t *testing.T) {
 	entry := hook.LastEntry()
 	assert.NotNil(t, entry)
 	assert.Equal(t, logrus.WarnLevel, entry.Level)
+	assert.Equal(t, "shim", entry.Data["source"])
+	assert.Equal(t, testContainerID, entry.Data["container"])
 	assert.Equal(t, warningMessage, entry.Message)
 
 	rig.Stop()

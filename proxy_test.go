@@ -564,6 +564,8 @@ func TestShimSignal(t *testing.T) {
 	shim := rig.ServeNewShim(token)
 	session := peekIOSession(rig.proxy, token)
 
+	session.containerID = testContainerID
+
 	// Simulate that a runtime has started the VM process
 	close(session.processStarted)
 
@@ -675,7 +677,7 @@ func TestShimSendSignalAfterExeccmd(t *testing.T) {
 	go func() {
 		time.Sleep(smallWaitTimeout)
 		err := shim.client.Kill(syscall.SIGUSR1)
-		assert.Nil(t, err)
+		assert.NotNil(t, err)
 		wg.Done()
 	}()
 
@@ -690,10 +692,10 @@ func TestShimSendSignalAfterExeccmd(t *testing.T) {
 
 	wg.Wait()
 
-	// This time the signal cmd has been forwarded. Hyperstart should have
-	// received two messages (execcmd + signal)
+	// This time (again) the signal cmd has not been forwarded. Hyperstart
+	// should have received one messages (execcmd)
 	msgs = rig.Hyperstart.GetLastMessages()
-	assert.Equal(t, 2, len(msgs))
+	assert.Equal(t, 1, len(msgs))
 
 	// Cleanup
 	shim.close()

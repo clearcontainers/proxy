@@ -16,6 +16,7 @@ gometalinter \
 	--exclude='duplicate of.*_test.go.*\(dupl\)$' \
 	--exclude='client.go:.*level can be fmt.Stringer' \
 	--exclude='client.go:.*source can be fmt.Stringer' \
+	--exclude='error: no formatting directive in Logf call \(vet\)$' \
 	--disable=aligncheck \
 	--disable=gotype \
 	--disable=gas \

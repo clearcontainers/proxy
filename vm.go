@@ -77,6 +77,9 @@ type ioSession struct {
 	// token is what identifies the I/O session to the external world
 	token Token
 
+	// containerID is the container ID related to this session
+	containerID string
+
 	// Back pointer to the VM this session is attached to.
 	vm *vm
 
@@ -346,6 +349,8 @@ func newcontainerHandler(vm *vm, hyper *api.Hyper, session *ioSession) error {
 		return err
 	}
 
+	session.containerID = cmdIn.ID
+
 	if err := relocateProcess(cmdIn.Process, session); err != nil {
 		return err
 	}
@@ -538,8 +543,25 @@ func (session *ioSession) SendTerminalSize(columns, rows int) error {
 
 // SendSignal
 func (session *ioSession) SendSignal(signal syscall.Signal) error {
+
+	// In case the containerID related to the session is empty, the signal
+	// must not be forwarded to the initial container process. This is a
+	// case where the caller is trying to send a signal to a process
+	// started with "execcmd". Because hyperstart does not provide the
+	// support to perform this action, we don't forward the signal at all
+	// and return an error to the shim.
+	//
+	// FIXME: Change this when hyperstart will be capable of forwarding a
+	// signal to a process different from the initial container process.
+	if session.containerID == "" {
+		return fmt.Errorf("Could not send the signal %s: Sending" +
+			" a signal to a process different from the initial" +
+			" container process is not supported",
+			signal.String())
+	}
+
 	msg := &hyperstart.KillCommand{
-		Container: session.vm.containerID,
+		Container: session.containerID,
 		Signal:    signal,
 	}
 

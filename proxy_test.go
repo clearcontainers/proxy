@@ -806,6 +806,7 @@ func TestLog(t *testing.T) {
 	rig.SetRunHyperstart(false)
 	rig.Start()
 
+	// Test Log()
 	const warningMessage = "A warning!"
 	hook := test.NewGlobal()
 	rig.Client.Log(goapi.LogLevelWarn, goapi.LogSourceShim, testContainerID, warningMessage)
@@ -815,7 +816,20 @@ func TestLog(t *testing.T) {
 	entry := hook.LastEntry()
 	assert.NotNil(t, entry)
 	assert.Equal(t, logrus.WarnLevel, entry.Level)
+	assert.Equal(t, "shim", entry.Data["source"])
+	assert.Equal(t, testContainerID, entry.Data["container"])
 	assert.Equal(t, warningMessage, entry.Message)
+
+	// Test Logf()
+	rig.Client.Logf(goapi.LogLevelError, goapi.LogSourceRuntime, testContainerID, "foo %s", "bar")
+
+	SyncWithProxy(rig.Client)
+
+	entry = hook.LastEntry()
+	assert.NotNil(t, entry)
+	assert.Equal(t, logrus.ErrorLevel, entry.Level)
+	assert.Equal(t, "runtime", entry.Data["source"])
+	assert.Equal(t, "foo bar", entry.Message)
 
 	rig.Stop()
 }

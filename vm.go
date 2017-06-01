@@ -38,8 +38,8 @@ type vm struct {
 
 	containerID string
 
-	logIO         *logrus.Entry
-	logHyperstart *logrus.Entry
+	logIO   *logrus.Entry
+	logQemu *logrus.Entry
 
 	hyperHandler *hyperstart.Hyperstart
 
@@ -114,12 +114,12 @@ const (
 func newVM(id, ctlSerial, ioSerial string) *vm {
 	h := hyperstart.NewHyperstart(ctlSerial, ioSerial, "unix")
 
-	log := logrus.WithFields(logrus.Fields{"vm": id})
+	log := proxyLog.WithFields(logrus.Fields{"vm": id})
 
 	vm := &vm{
 		containerID:    id,
 		logIO:          log.WithField("section", "io"),
-		logHyperstart:  log.WithField("section", "hyperstart"),
+		logQemu:        log.WithField("source", "qemu"),
 		hyperHandler:   h,
 		nextIoBase:     firstIoBase,
 		ioSessions:     make(map[uint64]*ioSession),
@@ -170,7 +170,12 @@ func (vm *vm) dump(data []byte) {
 	if logrus.GetLevel() != logrus.DebugLevel {
 		return
 	}
-	logrus.WithField("wm", vm.containerID).Debug("\n", hex.Dump(data))
+
+	if len(data) == 0 {
+		return
+	}
+
+	proxyLog.WithField("wm", vm.containerID).Debug("\n", hex.Dump(data))
 }
 
 func (vm *vm) findSessionBySeq(seq uint64) *ioSession {
@@ -259,14 +264,9 @@ func (vm *vm) ioHyperToClients() {
 
 // Stream the VM console to stderr
 func (vm *vm) consoleToLog() {
-	reader := bufio.NewReader(vm.console.conn)
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			break
-		}
-
-		vm.logHyperstart.Debug(line)
+	scanner := bufio.NewScanner(vm.console.conn)
+	for scanner.Scan() {
+		vm.logQemu.Debug(scanner.Text())
 	}
 
 	vm.wg.Done()

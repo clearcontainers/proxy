@@ -736,7 +736,11 @@ func (p *profiler) setup() {
 	}()
 }
 
+// Version is the proxy version. This variable is populated at build time.
+var Version = "unknown"
+
 func main() {
+	doVersion := flag.Bool("version", false, "display the version")
 	logLevel := flag.String("log", "warn",
 		"log messages above specified level; one of debug, warn, error, fatal or panic")
 
@@ -753,6 +757,11 @@ func main() {
 
 	if err := SetLoggingLevel(*logLevel); err != nil {
 		logrus.Fatal(err)
+	}
+
+	if *doVersion {
+		fmt.Println("Version:", Version)
+		os.Exit(0)
 	}
 
 	pprof.setup()

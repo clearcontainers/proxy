@@ -108,3 +108,10 @@ $(GENERATED_FILES): %: %.in Makefile
 		-e 's|[@]libexecdir[@]|$(LIBEXECDIR)|' \
 		-e "s|[@]localstatedir[@]|$(LOCALSTATEDIR)|" \
 		"$<" > "$@"
+
+#
+# dist
+#
+
+dist:
+	git archive --format=tar --prefix=cc-proxy-$(VERSION)/ HEAD | xz -c > cc-proxy-$(VERSION).tar.xz

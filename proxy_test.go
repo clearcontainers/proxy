@@ -286,7 +286,7 @@ func TestHyperPing(t *testing.T) {
 	// Send ping and verify we have indeed received the message on the
 	// hyperstart side. Ping is somewhat interesting because it's a case of
 	// an hyper message without data.
-	err = rig.Client.Hyper("ping", nil)
+	_, err = rig.Client.Hyper("ping", nil)
 	assert.Nil(t, err)
 
 	msgs := rig.Hyperstart.GetLastMessages()
@@ -315,7 +315,7 @@ func TestHyperStartpod(t *testing.T) {
 		Hostname: "testhostname",
 		ShareDir: "rootfs",
 	}
-	err = rig.Client.Hyper("startpod", &startpod)
+	_, err = rig.Client.Hyper("startpod", &startpod)
 	assert.Nil(t, err)
 
 	msgs := rig.Hyperstart.GetLastMessages()
@@ -425,7 +425,7 @@ func TestHyperSequenceNumberRelocation(t *testing.T) {
 			Args: []string{"/bin/sh"},
 		},
 	}
-	err := rig.Client.HyperWithTokens("newcontainer", []string{token}, &newcontainer)
+	_, err := rig.Client.HyperWithTokens("newcontainer", []string{token}, &newcontainer)
 	assert.Nil(t, err)
 
 	// Verify hyperstart has received the message with relocation
@@ -617,7 +617,7 @@ func TestShimConnectAfterExeccmd(t *testing.T) {
 			Args: []string{"/bin/sh"},
 		},
 	}
-	err := rig.Client.HyperWithTokens("execcmd", []string{token}, &execcmd)
+	_, err := rig.Client.HyperWithTokens("execcmd", []string{token}, &execcmd)
 	assert.NotNil(t, err)
 	assert.True(t, strings.Contains(err.Error(), "timeout"))
 	waitForShimTimeout = oldTimeout
@@ -635,7 +635,7 @@ func TestShimConnectAfterExeccmd(t *testing.T) {
 		wg.Done()
 	}()
 
-	err = rig.Client.HyperWithTokens("execcmd", []string{token}, &execcmd)
+	_, err = rig.Client.HyperWithTokens("execcmd", []string{token}, &execcmd)
 	assert.Nil(t, err)
 
 	wg.Wait()
@@ -687,7 +687,7 @@ func TestShimSendSignalAfterExeccmd(t *testing.T) {
 			Args: []string{"/bin/sh"},
 		},
 	}
-	err = rig.Client.HyperWithTokens("execcmd", []string{token}, &execcmd)
+	_, err = rig.Client.HyperWithTokens("execcmd", []string{token}, &execcmd)
 	assert.Nil(t, err)
 
 	wg.Wait()
@@ -752,7 +752,7 @@ func TestShimSendStdinAfterExeccmd(t *testing.T) {
 			Args: []string{"/bin/sh"},
 		},
 	}
-	err = rig.Client.HyperWithTokens("execcmd", []string{token}, &execcmd)
+	_, err = rig.Client.HyperWithTokens("execcmd", []string{token}, &execcmd)
 	assert.Nil(t, err)
 
 	wg.Wait()

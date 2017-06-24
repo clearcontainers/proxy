@@ -555,8 +555,8 @@ func (session *ioSession) SendSignal(signal syscall.Signal) error {
 	// FIXME: Change this when hyperstart will be capable of forwarding a
 	// signal to a process different from the initial container process.
 	if session.containerID == "" {
-		return fmt.Errorf("Could not send the signal %s: Sending" +
-			" a signal to a process different from the initial" +
+		return fmt.Errorf("Could not send the signal %s: Sending"+
+			" a signal to a process different from the initial"+
 			" container process is not supported",
 			signal.String())
 	}

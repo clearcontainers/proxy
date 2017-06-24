@@ -833,3 +833,24 @@ func TestLog(t *testing.T) {
 
 	rig.Stop()
 }
+
+func TestHyperstartResponse(t *testing.T) {
+	rig := newTestRig(t)
+	rig.Start()
+
+	ctlSocketPath, ioSocketPath := rig.Hyperstart.GetSocketPaths()
+	_, err := rig.Client.RegisterVM(testContainerID, ctlSocketPath, ioSocketPath, nil)
+	assert.Nil(t, err)
+
+	// Pre-fill what hyper will return.
+	const testMsg = "Foo Foo!"
+	msgData := []byte(testMsg)
+	rig.Hyperstart.SendMessage(hyperstart.AckCode, msgData)
+
+	// Trigger and message + response.
+	data, err := rig.Client.Hyper("ping", msgData)
+	assert.Nil(t, err)
+	assert.Equal(t, msgData, data)
+
+	rig.Stop()
+}

@@ -22,7 +22,6 @@ import (
 	"github.com/clearcontainers/proxy/api"
 )
 
-// XXX: could do with its own package to remove that ugly namespacing
 type commandHandler func([]byte, interface{}, *handlerResponse)
 
 // Encapsulates the different parts of what a handler can return.

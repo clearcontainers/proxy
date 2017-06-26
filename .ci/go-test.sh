@@ -31,7 +31,13 @@ function test_coverage
 
 function test_local
 {
-	go test $go_test_flags $test_packages
+	for pkg in ${test_packages[@]}; do
+		fields=(${pkg//;/ })
+		pkg_name=${fields[0]}
+		packages="$packages $pkg_name"
+	done
+
+	go test $go_test_flags $packages
 }
 
 if [ "$1" = "html-coverage" ]; then

@@ -439,6 +439,9 @@ func (vm *vm) SendMessage(hyper *api.Hyper) ([]byte, error) {
 	}
 
 	response, err := vm.hyperHandler.SendCtlMessage(hyper.HyperName, hyper.Data)
+	if err != nil {
+		return nil, err
+	}
 
 	if session != nil {
 		// We have now started the process inside the VM, let the shim send stdin

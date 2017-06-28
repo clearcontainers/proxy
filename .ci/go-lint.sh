@@ -18,6 +18,7 @@ gometalinter \
 	--exclude='client.go:.*source can be fmt.Stringer' \
 	--exclude='error: no formatting directive in Logf call \(vet\)$' \
 	--disable=aligncheck \
+	--disable=megacheck \
 	--disable=gotype \
 	--disable=gas \
 	--disable=vetshadow \

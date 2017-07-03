@@ -52,9 +52,8 @@ all: cc-proxy $(UNIT_FILES)
 #
 
 cc-proxy: $(SOURCES) Makefile
-	$(QUIET_GOBUILD)go build -i -o $@ \
-		-ldflags "-X main.DefaultSocketPath=$(PROXY_SOCKET)" \
-		-ldflags "-X main.Version=$(VERSION)"
+	$(QUIET_GOBUILD)go build -i -o $@ -ldflags \
+		"-X main.DefaultSocketPath=$(PROXY_SOCKET) -X main.Version=$(VERSION)"
 
 #
 # Tests

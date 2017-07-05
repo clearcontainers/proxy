@@ -21,22 +21,30 @@
 
 set -e
 
+test_repo="github.com/clearcontainers/tests"
+
+# Clone Tests repository.
+go get "$test_repo"
+
+test_repo_dir="${GOPATH}/src/${test_repo}"
+
 if [ "$TRAVIS" = true ]
 then
-    test_repo="github.com/clearcontainers/tests"
+	# Check the commits in the branch
+	checkcommits_dir="${test_repo_dir}/cmd/checkcommits"
+	(cd "${checkcommits_dir}" && make)
+	checkcommits \
+		--need-fixes \
+		--need-sign-offs \
+		--body-length 72 \
+		--subject-length 75 \
+		--verbose
 
-    # Clone Tests repository.
-    go get "$test_repo"
-
-    test_repo_dir="${GOPATH}/src/${test_repo}"
-
-    # Check the commits in the branch
-    checkcommits_dir="${test_repo_dir}/cmd/checkcommits"
-    (cd "${checkcommits_dir}" && make)
-    checkcommits \
-        --need-fixes \
-        --need-sign-offs \
-        --body-length 72 \
-        --subject-length 75 \
-        --verbose
+	# Travis doesn't provide a VT-x environment, so nothing more to do
+	# here.
+	exit 0
 fi
+
+# Setup environment and build components.
+cd "${test_repo_dir}"
+sudo -E PATH=$PATH bash .ci/setup.sh

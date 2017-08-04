@@ -768,6 +768,52 @@ func TestShimSendStdinAfterExeccmd(t *testing.T) {
 	rig.Stop()
 }
 
+// This test ensures that a shim will receive the exit code signal even if
+// the process inside the corresponding container has not been started.
+// This case occurs when a container has been created and it receives a KILL
+// or TERM signal. We don't forward the signal to hyperstart because nothing
+// runs inside the VM, but we still need to remove the shim which is seen as
+// the container process from any orchestrator.
+func testShimSignalProcessNotStarted(t *testing.T, signal syscall.Signal, expectFail bool) {
+	rig := newTestRig(t)
+	rig.Start()
+
+	token := rig.RegisterVM()
+	shim := rig.ServeNewShim(token)
+	session := peekIOSession(rig.proxy, token)
+
+	session.containerID = testContainerID
+
+	// Don't close session.processStarted because we want to simulate
+	// a case where the container has been created but not started.
+
+	// Send signal and check the shim receives an exit code.
+	err := shim.client.Kill(signal)
+
+	if expectFail {
+		assert.NotNil(t, err)
+	} else {
+		assert.Nil(t, err)
+	}
+
+	// Cleanup
+	shim.close()
+
+	rig.Stop()
+}
+
+func TestShimKillSignalProcessNotStarted(t *testing.T) {
+	testShimSignalProcessNotStarted(t, syscall.SIGKILL, false)
+}
+
+func TestShimTermSignalProcessNotStarted(t *testing.T) {
+	testShimSignalProcessNotStarted(t, syscall.SIGTERM, false)
+}
+
+func TestShimUsr1SignalProcessNotStarted(t *testing.T) {
+	testShimSignalProcessNotStarted(t, syscall.SIGUSR1, true)
+}
+
 func TestValidateLogEntry(t *testing.T) {
 	tests := []struct {
 		payload api.LogEntry

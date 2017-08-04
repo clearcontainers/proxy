@@ -518,6 +518,16 @@ func (session *ioSession) ForwardStdin(frame *api.Frame) error {
 	return vm.hyperHandler.SendIoMessage(msg)
 }
 
+// TerminateShim forces the shim to exit
+func (session *ioSession) TerminateShim() error {
+	exitCode := uint8(0)
+	frame := api.NewFrame(api.TypeNotification, int(api.NotificationProcessExited), []byte{exitCode})
+
+	session.vm.logIO.Infof("proxy terminating the shim")
+
+	return api.WriteFrame(session.client, frame)
+}
+
 // windowSizeMessage07 is the hyperstart 0.7 winsize message payload for the
 // winsize command. This payload has changed in 0.8 so we can't use the
 // definition in the hyperstart package.

@@ -83,9 +83,8 @@ type client struct {
 
 	log *logrus.Entry
 
-	// token and session are populated once a client has issued a successful
+	// session are populated once a client has issued a successful
 	// Connectshim.
-	token   Token
 	session *ioSession
 
 	conn net.Conn
@@ -356,7 +355,6 @@ func connectShim(data []byte, userData interface{}, response *handlerResponse) {
 	}
 
 	client.kind = clientKindShim
-	client.token = token
 	client.session = session
 
 	client.log.Infof("ConnectShim(token=%s)", payload.Token)
@@ -372,20 +370,19 @@ func disconnectShim(data []byte, userData interface{}, response *handlerResponse
 		return
 	}
 
-	session, err := proxy.releaseToken(client.token)
+	session, err := proxy.releaseToken(client.session.token)
 	if err != nil {
 		response.SetError(err)
 		return
 	}
 
-	err = session.vm.FreeToken(client.token)
+	err = session.vm.FreeToken(client.session.token)
 	if err != nil {
 		response.SetError(err)
 		return
 	}
 
 	client.session = nil
-	client.token = ""
 
 	client.log.Infof("DisconnectShim()")
 }
@@ -641,7 +638,7 @@ func (proxy *proxy) serveNewClient(proto *protocol, newConn net.Conn) {
 	// session alive and hope a shim will reconnect claiming the same token.
 	if newClient.session != nil {
 		proxy.Lock()
-		info := proxy.tokenToSession[newClient.token]
+		info := proxy.tokenToSession[newClient.session.token]
 		info.state = tokenStateAllocated
 		proxy.Unlock()
 	}

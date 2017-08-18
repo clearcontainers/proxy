@@ -486,7 +486,7 @@ func peekIOSession(proxy *proxy, tokenStr string) *ioSession {
 	proxy.Lock()
 	defer proxy.Unlock()
 
-	info := proxy.tokenToVM[token]
+	info := proxy.tokenToSession[token]
 	if info == nil {
 		return nil
 	}

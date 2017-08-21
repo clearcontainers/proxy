@@ -311,6 +311,11 @@ func unregisterVM(data []byte, userData interface{}, response *handlerResponse) 
 	delete(proxy.vms, vm.containerID)
 	proxy.Unlock()
 
+	if err := vm.freeSessions(); err != nil {
+		response.SetErrorf("Failed to free Sessions: %s", err)
+		return
+	}
+
 	client.vm = nil
 }
 

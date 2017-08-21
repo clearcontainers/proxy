@@ -627,6 +627,17 @@ func (vm *vm) AllocateSession() (*ioSession, error) {
 	return session, nil
 }
 
+func (vm *vm) freeSessions() error {
+	vm.Lock()
+	defer vm.Unlock()
+	for t := range vm.tokenToSession {
+		if err := vm.freeTokenUnlocked(t); err != nil {
+			return fmt.Errorf("Failed to free session with token %s", t)
+		}
+	}
+	return nil
+}
+
 // AssociateShim associates a shim given by the triplet (token, clientID,
 // clientConn) to a vm (POD). After associating the shim, a hyper command can
 // be issued to start the process inside the VM and data can flow between shim

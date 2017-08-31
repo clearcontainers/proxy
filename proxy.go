@@ -25,6 +25,7 @@ import (
 	_ "net/http/pprof"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -404,7 +405,7 @@ func disconnectShim(data []byte, userData interface{}, response *handlerResponse
 }
 
 // "signal"
-func signal(data []byte, userData interface{}, response *handlerResponse) {
+func cmdSignal(data []byte, userData interface{}, response *handlerResponse) {
 	client := userData.(*client)
 	payload := api.Signal{}
 
@@ -673,7 +674,7 @@ func (proxy *proxy) serve() {
 	proto.HandleCommand(api.CmdHyper, hyper)
 	proto.HandleCommand(api.CmdConnectShim, connectShim)
 	proto.HandleCommand(api.CmdDisconnectShim, disconnectShim)
-	proto.HandleCommand(api.CmdSignal, signal)
+	proto.HandleCommand(api.CmdSignal, cmdSignal)
 	proto.HandleStream(api.StreamStdin, forwardStdin)
 	proto.HandleStream(api.StreamLog, handleLogEntry)
 
@@ -696,6 +697,28 @@ func proxyMain() {
 		fmt.Fprintln(os.Stderr, "init:", err.Error())
 		os.Exit(1)
 	}
+
+	// Tune KSM if available
+	ksm, err := newKSM(defaultKSMRoot)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "init:", err.Error())
+	} else {
+		c := make(chan os.Signal, 2)
+		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+
+		go func() {
+			<-c
+			_ = ksm.restore()
+			os.Exit(0)
+		}()
+	}
+
+	if defaultKSMSetting != ksmInitial {
+		if err := ksm.tune(ksmSettings[defaultKSMSetting]); err != nil {
+			fmt.Fprintln(os.Stderr, "init:", err.Error())
+		}
+	}
+
 	proxy.serve()
 
 	// Wait for all the goroutines started by registerVMHandler to finish.
@@ -707,6 +730,8 @@ func proxyMain() {
 	// That said, this wait group is used in the tests to ensure proper
 	// serialisation between runs of proxyMain()(see proxy/proxy_test.go).
 	proxy.wg.Wait()
+
+	_ = ksm.restore()
 }
 
 // SetLoggingLevel sets the logging level for the whole application. The values

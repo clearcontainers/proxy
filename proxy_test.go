@@ -65,7 +65,7 @@ func newTestRig(t *testing.T) *testRig {
 	proto.HandleCommand(api.CmdHyper, hyper)
 	proto.HandleCommand(api.CmdConnectShim, connectShim)
 	proto.HandleCommand(api.CmdDisconnectShim, disconnectShim)
-	proto.HandleCommand(api.CmdSignal, signal)
+	proto.HandleCommand(api.CmdSignal, cmdSignal)
 	proto.HandleStream(api.StreamStdin, forwardStdin)
 	proto.HandleStream(api.StreamLog, handleLogEntry)
 

@@ -34,6 +34,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+const unixURLPrefix = "unix:"
+
 type testRig struct {
 	t  *testing.T
 	wg sync.WaitGroup
@@ -342,7 +344,7 @@ func TestRegisterVMAllocateTokens(t *testing.T) {
 		&goapi.RegisterVMOptions{NumIOStreams: 2})
 	assert.Nil(t, err)
 	assert.NotNil(t, ret)
-	assert.True(t, strings.HasPrefix(ret.IO.URL, "unix://"))
+	assert.True(t, strings.HasPrefix(ret.IO.URL, unixURLPrefix))
 	assert.Equal(t, 2, len(ret.IO.Tokens))
 
 	// This test shouldn't send anything to hyperstart.
@@ -365,7 +367,7 @@ func TestAttachVMAllocateTokens(t *testing.T) {
 	ret, err := rig.Client.AttachVM(testContainerID, &goapi.AttachVMOptions{NumIOStreams: 2})
 	assert.Nil(t, err)
 	assert.NotNil(t, ret)
-	assert.True(t, strings.HasPrefix(ret.IO.URL, "unix://"))
+	assert.True(t, strings.HasPrefix(ret.IO.URL, unixURLPrefix))
 	assert.Equal(t, 2, len(ret.IO.Tokens))
 
 	// Cleanup

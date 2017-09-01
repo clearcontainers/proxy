@@ -27,6 +27,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 type ksmSetting struct {
@@ -92,19 +93,54 @@ func (s ksmSetting) pagesToScan() (string, error) {
 	return fmt.Sprintf("%v", pagesToScan), nil
 }
 
+type ksmSettingKnob string
+
 const (
-	ksmInitial    = "initial"
-	ksmOff        = "off"
-	ksmSlow       = "slow"
-	ksmStandard   = "standard"
-	ksmAggressive = "aggressive"
+	ksmInitial    ksmSettingKnob = "initial"
+	ksmOff                       = "off"
+	ksmSlow                      = "slow"
+	ksmStandard                  = "standard"
+	ksmAggressive                = "aggressive"
+	ksmAuto                      = "auto"
 )
 
-var ksmSettings = map[string]ksmSetting{
+var ksmSettings = map[ksmSettingKnob]ksmSetting{
 	ksmOff:        {false, 1000, 500}, // Turn KSM off
 	ksmSlow:       {true, 500, 100},   // Every 100ms, we scan 1 page for every 500 pages available in the system
 	ksmStandard:   {true, 100, 10},    // Every 10ms, we scan 1 page for every 100 pages available in the system
 	ksmAggressive: {true, 10, 1},      // Every ms, we scan 1 page for every 10 pages available in the system
+}
+
+func (k ksmSettingKnob) String() string {
+	switch k {
+	case ksmOff:
+		return "off"
+	case ksmInitial:
+		return "initial"
+	case ksmAuto:
+		return "auto"
+	}
+
+	return ""
+}
+
+func (k *ksmSettingKnob) Set(value string) error {
+	for _, r := range strings.Split(value, ",") {
+		if r == "off" {
+			*k = ksmOff
+			return nil
+		} else if r == "initial" {
+			*k = ksmInitial
+			return nil
+		} else if r == "auto" {
+			*k = ksmAuto
+			return nil
+		}
+
+		return fmt.Errorf("Unsupported KSM knob %v", r)
+	}
+
+	return nil
 }
 
 var defaultKSMRoot = "/sys/kernel/mm/ksm/"
@@ -117,7 +153,7 @@ const (
 	ksmSleepMillisec  = "sleep_millisecs"
 	ksmStart          = "1"
 	ksmStop           = "0"
-	defaultKSMSetting = ksmInitial
+	defaultKSMSetting = ksmAuto
 )
 
 type sysfsAttribute struct {
@@ -171,6 +207,9 @@ type ksm struct {
 	initialPagesToScan   string
 	initialSleepInterval string
 	initialKSMRun        string
+
+	currentKnob ksmSettingKnob
+	kickChannel chan bool
 
 	sync.Mutex
 }
@@ -247,6 +286,9 @@ func newKSM(root string) (*ksm, error) {
 	}
 
 	k.initialized = true
+	k.currentKnob = ksmAggressive
+	k.kickChannel = make(chan bool)
+
 	return &k, nil
 }
 
@@ -322,4 +364,99 @@ func (k *ksm) tune(s ksmSetting) error {
 	}
 
 	return nil
+}
+
+type ksmThrottleInterval struct {
+	interval time.Duration
+	nextKnob ksmSettingKnob
+}
+
+var ksmAggressiveInterval = 30 * time.Second
+var ksmStandardInterval = 120 * time.Second
+var ksmSlowInterval = 120 * time.Second
+
+var ksmThrottleIntervals = map[ksmSettingKnob]ksmThrottleInterval{
+	ksmAggressive: {
+		// From aggressive: move to standard and wait 120s
+		interval: ksmStandardInterval,
+		nextKnob: ksmStandard,
+	},
+
+	ksmStandard: {
+		// From standard: move to slow and wait 120s
+		interval: ksmSlowInterval,
+		nextKnob: ksmSlow,
+	},
+
+	ksmSlow: {
+		// We stop at slow
+		interval: 0,
+	},
+}
+
+func (k *ksm) throttle() {
+	k.Lock()
+	defer k.Unlock()
+
+	if !k.initialized {
+		proxyLog.Error(errors.New("KSM is unavailable"))
+		return
+	}
+
+	go func() {
+		throttleTimer := time.NewTimer(ksmThrottleIntervals[k.currentKnob].interval)
+
+		for {
+			select {
+			case <-k.kickChannel:
+				// We got kicked, this means a new VM has been created.
+				// We will enter the aggressive setting until we throttle down.
+				_ = throttleTimer.Stop()
+				if err := k.tune(ksmSettings[ksmAggressive]); err != nil {
+					proxyLog.Error(err)
+					continue
+				}
+
+				k.Lock()
+				k.currentKnob = ksmAggressive
+				k.Unlock()
+
+				_ = throttleTimer.Reset(ksmAggressiveInterval)
+
+			case <-throttleTimer.C:
+				// Our throttling down timer kicked in.
+				// We will move down to the next knob and start the next time,
+				// if necessary.
+				if ksmThrottleIntervals[k.currentKnob].interval == 0 {
+					continue
+				}
+
+				nextKnob := ksmThrottleIntervals[k.currentKnob].nextKnob
+				interval := ksmThrottleIntervals[k.currentKnob].interval
+				if err := k.tune(ksmSettings[nextKnob]); err != nil {
+					proxyLog.Error(err)
+					continue
+				}
+
+				k.Lock()
+				k.currentKnob = nextKnob
+				k.Unlock()
+
+				_ = throttleTimer.Reset(interval)
+			}
+		}
+	}()
+}
+
+// kick gets us back to the aggressive setting
+func (k *ksm) kick() {
+	k.Lock()
+	defer k.Unlock()
+
+	if !k.initialized {
+		proxyLog.Error(errors.New("KSM is unavailable"))
+		return
+	}
+
+	k.kickChannel <- true
 }

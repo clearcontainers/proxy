@@ -58,6 +58,9 @@ type tokenInfo struct {
 // proxyLog for proxy message that shouldn't use a specialized one.
 var proxyLog = logrus.WithField("source", "proxy")
 
+// KSM setting
+var proxyKSM *ksm
+
 // Main struct holding the proxy state
 type proxy struct {
 	// Protect concurrent accesses from separate client goroutines to this
@@ -243,6 +246,10 @@ func registerVM(data []byte, userData interface{}, response *handlerResponse) {
 	}
 
 	client.vm = vm
+
+	if proxyKSM != nil {
+		proxyKSM.kick()
+	}
 
 	// We start one goroutine per-VM to monitor the qemu process
 	proxy.wg.Add(1)
@@ -692,6 +699,8 @@ func (proxy *proxy) serve() {
 }
 
 func proxyMain() {
+	var err error
+
 	proxy := newProxy()
 	if err := proxy.init(); err != nil {
 		fmt.Fprintln(os.Stderr, "init:", err.Error())
@@ -699,7 +708,7 @@ func proxyMain() {
 	}
 
 	// Tune KSM if available
-	ksm, err := newKSM(defaultKSMRoot)
+	proxyKSM, err = newKSM(defaultKSMRoot)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "init:", err.Error())
 	} else {
@@ -708,14 +717,18 @@ func proxyMain() {
 
 		go func() {
 			<-c
-			_ = ksm.restore()
+			_ = proxyKSM.restore()
 			os.Exit(0)
 		}()
-	}
 
-	if defaultKSMSetting != ksmInitial {
-		if err := ksm.tune(ksmSettings[defaultKSMSetting]); err != nil {
-			fmt.Fprintln(os.Stderr, "init:", err.Error())
+		if ksmKnob != ksmInitial {
+			if ksmKnob == ksmAuto {
+				proxyKSM.throttle()
+			} else {
+				if err := proxyKSM.tune(ksmSettings[ksmKnob]); err != nil {
+					fmt.Fprintln(os.Stderr, "init:", err.Error())
+				}
+			}
 		}
 	}
 
@@ -731,7 +744,7 @@ func proxyMain() {
 	// serialisation between runs of proxyMain()(see proxy/proxy_test.go).
 	proxy.wg.Wait()
 
-	_ = ksm.restore()
+	_ = proxyKSM.restore()
 }
 
 // SetLoggingLevel sets the logging level for the whole application. The values
@@ -778,6 +791,7 @@ func (p *profiler) setup() {
 
 // Version is the proxy version. This variable is populated at build time.
 var Version = "unknown"
+var ksmKnob ksmSettingKnob
 
 func main() {
 	doVersion := flag.Bool("version", false, "display the version")
@@ -792,6 +806,10 @@ func main() {
 		"host the pprof server will be bound to")
 	flag.UintVar(&pprof.port, "pprof-port", 6060,
 		"port the pprof server will be bound to")
+
+	ksmKnob = defaultKSMSetting
+
+	flag.Var(&ksmKnob, "ksm", "KSM settings [off, initial, auto]")
 
 	flag.Parse()
 

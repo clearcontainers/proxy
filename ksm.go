@@ -17,11 +17,14 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 )
@@ -34,14 +37,59 @@ type ksmSetting struct {
 	// to scan per KSM run.
 	// ksmd will san N pages, where N*pagesPerScanFactor is
 	// equal to the number of anonymous pages.
-	pagesPerScanFactor uint32
+	pagesPerScanFactor int64
 
 	// scanIntervalMS is the KSM scan interval in milliseconds.
 	scanIntervalMS uint32
 }
 
+func anonPages() (int64, error) {
+	// We're going to parse meminfo
+	f, err := os.Open(memInfo)
+	if err != nil {
+		return -1, err
+	}
+	defer f.Close()
+
+	scan := bufio.NewScanner(f)
+	for scan.Scan() {
+		line := scan.Text()
+
+		// We only care about anonymous pages
+		if !strings.HasPrefix(line, "AnonPages:") {
+			continue
+		}
+
+		// Extract the before last (value) and last (unit) fields
+		fields := strings.Split(line, " ")
+		value := fields[len(fields)-2]
+		totalMemory, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return -1, fmt.Errorf("Invalid integer")
+		}
+
+		// meminfo gives us kB
+		totalMemory *= 1024
+
+		// Fetch the system page size
+		pageSize := (int64)(os.Getpagesize())
+
+		nPages := totalMemory / pageSize
+		return nPages, nil
+	}
+
+	return 0, fmt.Errorf("Could not compute number of pages")
+}
+
 func (s ksmSetting) pagesToScan() (string, error) {
-	return "10000", nil
+	nPages, err := anonPages()
+	if err != nil {
+		return "", err
+	}
+
+	pagesToScan := nPages / s.pagesPerScanFactor
+
+	return fmt.Sprintf("%v", pagesToScan), nil
 }
 
 const (
@@ -61,6 +109,7 @@ var ksmSettings = map[string]ksmSetting{
 
 var defaultKSMRoot = "/sys/kernel/mm/ksm/"
 var errKSMUnavailable = errors.New("KSM is unavailable")
+var memInfo = "/proc/meminfo"
 
 const (
 	ksmRunFile        = "run"

@@ -1,0 +1,66 @@
+@startuml
+'Intel® Clear Containers Proxy Protocol sequence digram
+'This is the textual representation of a sequence diagram.
+'To generate it by plantuml https://github.com/plantuml/plantuml
+'Syntax: http://plantuml.com/sequence-diagram
+
+'Create command
+Docker -> Runtime: Create
+  'See VirtContainers API
+  Runtime -> VirtContainers: CreatePod(podConfig)
+    VirtContainers -> VirtContainers: pod.startVM()
+      Note right of Qemu: Qemu instance executed
+    VirtContainers -> Qemu: VM started
+    'asynchronous
+    Qemu --> Agent: Start
+    ' At this point the proxy is started
+    Note right of Proxy: Started
+    'See proxy API
+    VirtContainers -> Proxy: RegisterVM
+      Note right of Proxy: WaitForReady(agent)
+      'See hyperstart API
+      Agent -> Proxy: READY
+    Proxy --> VirtContainers: NumIOStreams,Tokens
+    VirtContainers -> Shim: startShims(Tokens)
+      Shim --> VirtContainers: Started
+      Note right of Shim: Shim process started
+    'asynchronous
+    Shim -> Proxy: Connect(token)
+    Proxy --> Shim: Shim Connected
+  VirtContainers --> Runtime: Pod
+Runtime --> Docker: Container Created
+
+'Start command
+Docker -> Runtime: Start
+Note right of Shim: Created by Runtime at create
+
+  Runtime -> VirtContainers : StartPod()
+    VirtContainers -> Proxy : hyper(startPod)
+    Proxy  --> VirtContainers: Pod Started
+
+    VirtContainers -> Proxy : hyper(NewContainer(pause))
+      Note right of VirtContainers: Pause is a special container
+    Proxy  --> VirtContainers: Container Created
+
+    VirtContainers -> Proxy : hyper(NewContainer(process,iosession))
+      Proxy -> Proxy : relocateHyperCommand()
+      Proxy -> Proxy : WaitForShim()
+      Note right of Proxy: Proxy assign iosequense to process and shim.
+      Note right of Proxy: 1)iosession.processStarted (see 2)
+      
+      Proxy -> Agent : NewContainer
+        Agent -> Process: Exec
+      Agent --> Proxy : Container Created
+    Proxy  --> VirtContainers: Container Created
+
+  VirtContainers -> Runtime : PodStarted
+Runtime --> Docker : container started
+
+Note right of Shim: Shim gets stdin stream from terminal
+Shim -> Shim:  handle_stdin();
+Shim -> Proxy:  send_proxy_message(stream_stdin)
+Note right of Proxy: 2) Wait for the process associated to shim session is started (see 1)
+Proxy -> Proxy: WaitForProcess()
+	Proxy -> Agent: IOStream
+    	Agent -> Process :IOStream
+@enduml

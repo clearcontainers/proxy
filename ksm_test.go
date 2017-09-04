@@ -308,3 +308,51 @@ func TestKSMKick(t *testing.T) {
 		t.Fatalf("KSM kick timeout")
 	}
 }
+
+func TestKSMTune(t *testing.T) {
+	var err error
+	var s string
+
+	sleepIntervalSysFs := sysfsAttribute{
+		path: filepath.Join(defaultKSMRoot, ksmSleepMillisec),
+	}
+
+	runSysFs := sysfsAttribute{
+		path: filepath.Join(defaultKSMRoot, ksmRunFile),
+	}
+
+	err = sleepIntervalSysFs.open()
+	defer sleepIntervalSysFs.close()
+	assert.Nil(t, err)
+
+	err = runSysFs.open()
+	defer runSysFs.close()
+	assert.Nil(t, err)
+
+	k := initKSM(defaultKSMRoot, t)
+
+	for _, v := range ksmSettings {
+		err = k.tune(v)
+		assert.Nil(t, err)
+
+		s, err = runSysFs.read()
+
+		assert.Nil(t, err)
+		assert.NotNil(t, s)
+		if v.run {
+			assert.Equal(t, s, "1", "Wrong run value")
+		} else {
+			assert.Equal(t, s, "0", "Wrong run value")
+		}
+
+		if !v.run {
+			continue
+		}
+
+		s, err = sleepIntervalSysFs.read()
+
+		assert.Nil(t, err)
+		assert.NotNil(t, s)
+		assert.Equal(t, s, fmt.Sprintf("%v", v.scanIntervalMS), "Wrong sleep interval")
+	}
+}

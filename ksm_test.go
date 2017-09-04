@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -291,4 +292,19 @@ func TestKSMRestore(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, s)
 	assert.Equal(t, s, interval)
+}
+
+func TestKSMKick(t *testing.T) {
+	k := initKSM(defaultKSMRoot, t)
+
+	timer := time.NewTimer(time.Second)
+	go k.kick()
+
+	select {
+	case <-k.kickChannel:
+		return
+
+	case <-timer.C:
+		t.Fatalf("KSM kick timeout")
+	}
 }

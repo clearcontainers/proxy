@@ -17,6 +17,7 @@
 package main
 
 import (
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -25,6 +26,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+const ksmString = "ksmrules"
+const anonPagesMemory = 16777216 // Typically 4096 pages
+
 func ksmTestPrepare() error {
 	newKSMRoot, err := ioutil.TempDir("", "cc-ksm-test")
 	if err != nil {
@@ -32,6 +36,18 @@ func ksmTestPrepare() error {
 	}
 
 	defaultKSMRoot = newKSMRoot
+
+	memInfoFile, err := ioutil.TempFile("", "cc-ksm-meminfo")
+	if err != nil {
+		return err
+	}
+
+	memInfo = memInfoFile.Name()
+
+	_, err = memInfoFile.WriteString(fmt.Sprintf("AnonPages: %v kB", anonPagesMemory))
+	if err != nil {
+		return err
+	}
 
 	ksmTestRun, err := os.Create(filepath.Join(defaultKSMRoot, ksmRunFile))
 	if err != nil {
@@ -57,6 +73,7 @@ func ksmTestPrepare() error {
 
 func ksmTestCleanup() {
 	os.RemoveAll(defaultKSMRoot)
+	os.RemoveAll(memInfo)
 }
 
 func TestKSMSysfsAttributeOpen(t *testing.T) {
@@ -81,8 +98,6 @@ func TestKSMSysfsAttributeOpenNonExistent(t *testing.T) {
 	assert.NotNil(t, err)
 }
 
-const ksmString = "ksmrules"
-
 func TestKSMSysfsAttributeReadWrite(t *testing.T) {
 	pagesToScanSysFs := sysfsAttribute{
 		path: filepath.Join(defaultKSMRoot, ksmPagesToScan),
@@ -100,4 +115,54 @@ func TestKSMSysfsAttributeReadWrite(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, s)
 	assert.Equal(t, s, ksmString, "Wrong sysfs read: %s", s)
+}
+
+func initKSM(root string, t *testing.T) *ksm {
+	k, err := newKSM(root)
+	assert.Nil(t, err)
+
+	return k
+}
+
+func TestKSMAvailabilityDummy(t *testing.T) {
+	_, err := newKSM("foo")
+	assert.NotNil(t, err)
+}
+
+func TestKSMAvailability(t *testing.T) {
+	k := initKSM(defaultKSMRoot, t)
+
+	err := k.isAvailable()
+	assert.Nil(t, err)
+}
+
+func TestKSMAnonPages(t *testing.T) {
+	pageSize := (int64)(os.Getpagesize())
+	expectedAnonPages := (anonPagesMemory * 1024) / pageSize
+
+	anonPages, err := anonPages()
+	assert.Nil(t, err)
+	assert.Equal(t, expectedAnonPages, anonPages, "Anonymous pages mismatch")
+}
+
+func TestKSMPagesToScan(t *testing.T) {
+	setting, valid := ksmSettings[ksmAggressive]
+	assert.True(t, valid)
+
+	anonPages, err := anonPages()
+	assert.Nil(t, err)
+	expectedPagesToScan := fmt.Sprintf("%v", anonPages/setting.pagesPerScanFactor)
+
+	pagesToScan, err := setting.pagesToScan()
+	assert.Nil(t, err)
+	assert.Equal(t, pagesToScan, expectedPagesToScan, "")
+}
+
+func TestKSMPagesToScanInvalidSetting(t *testing.T) {
+	setting := ksmSetting{
+		pagesPerScanFactor: 0,
+	}
+
+	_, err := setting.pagesToScan()
+	assert.NotNil(t, err)
 }

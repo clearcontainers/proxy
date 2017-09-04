@@ -32,6 +32,7 @@ func TestMain(m *testing.M) {
 	}
 
 	if err := ksmTestPrepare(); err != nil {
+		ksmTestCleanup()
 		fmt.Fprint(os.Stderr, err)
 	}
 

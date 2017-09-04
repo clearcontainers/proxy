@@ -83,6 +83,10 @@ func anonPages() (int64, error) {
 }
 
 func (s ksmSetting) pagesToScan() (string, error) {
+	if s.pagesPerScanFactor == 0 {
+		return "", errors.New("Invalid KSM setting")
+	}
+
 	nPages, err := anonPages()
 	if err != nil {
 		return "", err

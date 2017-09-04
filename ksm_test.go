@@ -210,3 +210,85 @@ func TestKSMInit(t *testing.T) {
 	assert.Equal(t, k.initialSleepInterval, interval)
 	assert.Equal(t, k.initialKSMRun, run)
 }
+
+func TestKSMRestore(t *testing.T) {
+	runSysFs := sysfsAttribute{
+		path: filepath.Join(defaultKSMRoot, ksmRunFile),
+	}
+
+	err := runSysFs.open()
+	defer runSysFs.close()
+	assert.Nil(t, err)
+
+	err = runSysFs.write(run)
+	assert.Nil(t, err)
+
+	pagesToScanSysFs := sysfsAttribute{
+		path: filepath.Join(defaultKSMRoot, ksmPagesToScan),
+	}
+
+	err = pagesToScanSysFs.open()
+	defer pagesToScanSysFs.close()
+	assert.Nil(t, err)
+
+	err = pagesToScanSysFs.write(scan)
+	assert.Nil(t, err)
+
+	sleepIntervalSysFs := sysfsAttribute{
+		path: filepath.Join(defaultKSMRoot, ksmSleepMillisec),
+	}
+
+	err = sleepIntervalSysFs.open()
+	defer sleepIntervalSysFs.close()
+	assert.Nil(t, err)
+
+	err = sleepIntervalSysFs.write(interval)
+	assert.Nil(t, err)
+
+	k := initKSM(defaultKSMRoot, t)
+
+	// Write dummy values and read them back
+	var newInterval = "foo"
+	var newRun = "bar"
+	var newScan = "foobar"
+
+	err = sleepIntervalSysFs.write(newInterval)
+	assert.Nil(t, err)
+
+	s, err := sleepIntervalSysFs.read()
+	assert.Nil(t, err)
+	assert.NotNil(t, s)
+	assert.Equal(t, s, newInterval)
+
+	err = runSysFs.write(newRun)
+	assert.Nil(t, err)
+	s, err = runSysFs.read()
+	assert.Nil(t, err)
+	assert.NotNil(t, s)
+	assert.Equal(t, s, newRun)
+
+	err = pagesToScanSysFs.write(newScan)
+	assert.Nil(t, err)
+	s, err = pagesToScanSysFs.read()
+	assert.Nil(t, err)
+	assert.NotNil(t, s)
+	assert.Equal(t, s, newScan)
+
+	// Now restore and verify that we read the initial values back
+	k.restore()
+
+	s, err = pagesToScanSysFs.read()
+	assert.Nil(t, err)
+	assert.NotNil(t, s)
+	assert.Equal(t, s, scan)
+
+	s, err = runSysFs.read()
+	assert.Nil(t, err)
+	assert.NotNil(t, s)
+	assert.Equal(t, s, run)
+
+	s, err = sleepIntervalSysFs.read()
+	assert.Nil(t, err)
+	assert.NotNil(t, s)
+	assert.Equal(t, s, interval)
+}

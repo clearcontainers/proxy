@@ -196,6 +196,12 @@ func (attr *sysfsAttribute) write(value string) error {
 	if err != nil {
 		return err
 	}
+
+	err = attr.file.Truncate(0)
+	if err != nil {
+		return err
+	}
+
 	_, err = attr.file.WriteString(value)
 
 	return err

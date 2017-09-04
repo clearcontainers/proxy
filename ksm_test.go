@@ -28,6 +28,9 @@ import (
 
 const ksmString = "ksmrules"
 const anonPagesMemory = 16777216 // Typically 4096 pages
+const run = "1"
+const interval = "10"
+const scan = "1000"
 
 func ksmTestPrepare() error {
 	newKSMRoot, err := ioutil.TempDir("", "cc-ksm-test")
@@ -165,4 +168,45 @@ func TestKSMPagesToScanInvalidSetting(t *testing.T) {
 
 	_, err := setting.pagesToScan()
 	assert.NotNil(t, err)
+}
+
+func TestKSMInit(t *testing.T) {
+	runSysFs := sysfsAttribute{
+		path: filepath.Join(defaultKSMRoot, ksmRunFile),
+	}
+
+	err := runSysFs.open()
+	defer runSysFs.close()
+	assert.Nil(t, err)
+
+	err = runSysFs.write(run)
+	assert.Nil(t, err)
+
+	pagesToScanSysFs := sysfsAttribute{
+		path: filepath.Join(defaultKSMRoot, ksmPagesToScan),
+	}
+
+	err = pagesToScanSysFs.open()
+	defer pagesToScanSysFs.close()
+	assert.Nil(t, err)
+
+	err = pagesToScanSysFs.write(scan)
+	assert.Nil(t, err)
+
+	sleepIntervalSysFs := sysfsAttribute{
+		path: filepath.Join(defaultKSMRoot, ksmSleepMillisec),
+	}
+
+	err = sleepIntervalSysFs.open()
+	defer sleepIntervalSysFs.close()
+	assert.Nil(t, err)
+
+	err = sleepIntervalSysFs.write(interval)
+	assert.Nil(t, err)
+
+	k := initKSM(defaultKSMRoot, t)
+
+	assert.Equal(t, k.initialPagesToScan, scan)
+	assert.Equal(t, k.initialSleepInterval, interval)
+	assert.Equal(t, k.initialKSMRun, run)
 }

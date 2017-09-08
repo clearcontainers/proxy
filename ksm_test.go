@@ -298,6 +298,7 @@ func TestKSMKick(t *testing.T) {
 	k := initKSM(defaultKSMRoot, t)
 
 	timer := time.NewTimer(time.Second)
+	k.throttling = true
 	go k.kick()
 
 	select {

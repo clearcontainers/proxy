@@ -219,6 +219,7 @@ type ksm struct {
 	initialKSMRun        string
 
 	currentKnob ksmMode
+	throttling  bool
 	kickChannel chan bool
 
 	sync.Mutex
@@ -238,6 +239,7 @@ func newKSM(root string) (*ksm, error) {
 	var k ksm
 
 	k.initialized = false
+	k.throttling = false
 	k.root = root
 
 	if root == "" {
@@ -296,7 +298,6 @@ func newKSM(root string) (*ksm, error) {
 	}
 
 	k.initialized = true
-	k.currentKnob = ksmAggressive
 	k.kickChannel = make(chan bool)
 
 	return &k, nil
@@ -413,13 +414,15 @@ func (k *ksm) throttle() {
 		return
 	}
 
+	k.currentKnob = ksmAggressive
+	k.throttling = true
+
 	go func() {
 		throttleTimer := time.NewTimer(ksmThrottleIntervals[k.currentKnob].interval)
 
 		for {
 			select {
 			case <-k.kickChannel:
-				proxyLog.Error("Throttle kicked")
 				// We got kicked, this means a new VM has been created.
 				// We will enter the aggressive setting until we throttle down.
 				_ = throttleTimer.Stop()
@@ -466,6 +469,11 @@ func (k *ksm) kick() {
 
 	if !k.initialized {
 		proxyLog.Error(errors.New("KSM is unavailable"))
+		return
+	}
+
+	// If we're not throttling, we must not kick.
+	if !k.throttling {
 		return
 	}
 

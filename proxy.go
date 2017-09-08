@@ -721,11 +721,11 @@ func proxyMain() {
 			os.Exit(0)
 		}()
 
-		if ksmKnob != ksmInitial {
-			if ksmKnob == ksmAuto {
+		if proxyKSMMode != ksmInitial {
+			if proxyKSMMode == ksmAuto {
 				proxyKSM.throttle()
 			} else {
-				if err := proxyKSM.tune(ksmSettings[ksmKnob]); err != nil {
+				if err := proxyKSM.tune(ksmSettings[proxyKSMMode]); err != nil {
 					fmt.Fprintln(os.Stderr, "init:", err.Error())
 				}
 			}
@@ -791,7 +791,7 @@ func (p *profiler) setup() {
 
 // Version is the proxy version. This variable is populated at build time.
 var Version = "unknown"
-var ksmKnob ksmSettingKnob
+var proxyKSMMode ksmMode
 
 func main() {
 	doVersion := flag.Bool("version", false, "display the version")
@@ -807,9 +807,9 @@ func main() {
 	flag.UintVar(&pprof.port, "pprof-port", 6060,
 		"port the pprof server will be bound to")
 
-	ksmKnob = defaultKSMSetting
+	proxyKSMMode = defaultKSMMode
 
-	flag.Var(&ksmKnob, "ksm", "KSM settings [off, initial, auto]")
+	flag.Var(&proxyKSMMode, "ksm", "KSM settings [off, initial, auto]")
 
 	flag.Parse()
 

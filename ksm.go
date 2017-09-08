@@ -97,25 +97,25 @@ func (s ksmSetting) pagesToScan() (string, error) {
 	return fmt.Sprintf("%v", pagesToScan), nil
 }
 
-type ksmSettingKnob string
+type ksmMode string
 
 const (
-	ksmInitial    ksmSettingKnob = "initial"
-	ksmOff                       = "off"
-	ksmSlow                      = "slow"
-	ksmStandard                  = "standard"
-	ksmAggressive                = "aggressive"
-	ksmAuto                      = "auto"
+	ksmInitial    ksmMode = "initial"
+	ksmOff                = "off"
+	ksmSlow               = "slow"
+	ksmStandard           = "standard"
+	ksmAggressive         = "aggressive"
+	ksmAuto               = "auto"
 )
 
-var ksmSettings = map[ksmSettingKnob]ksmSetting{
+var ksmSettings = map[ksmMode]ksmSetting{
 	ksmOff:        {false, 1000, 500}, // Turn KSM off
 	ksmSlow:       {true, 500, 100},   // Every 100ms, we scan 1 page for every 500 pages available in the system
 	ksmStandard:   {true, 100, 10},    // Every 10ms, we scan 1 page for every 100 pages available in the system
 	ksmAggressive: {true, 10, 1},      // Every ms, we scan 1 page for every 10 pages available in the system
 }
 
-func (k ksmSettingKnob) String() string {
+func (k ksmMode) String() string {
 	switch k {
 	case ksmOff:
 		return "off"
@@ -128,7 +128,7 @@ func (k ksmSettingKnob) String() string {
 	return ""
 }
 
-func (k *ksmSettingKnob) Set(value string) error {
+func (k *ksmMode) Set(value string) error {
 	for _, r := range strings.Split(value, ",") {
 		if r == "off" {
 			*k = ksmOff
@@ -152,12 +152,12 @@ var errKSMUnavailable = errors.New("KSM is unavailable")
 var memInfo = "/proc/meminfo"
 
 const (
-	ksmRunFile        = "run"
-	ksmPagesToScan    = "pages_to_scan"
-	ksmSleepMillisec  = "sleep_millisecs"
-	ksmStart          = "1"
-	ksmStop           = "0"
-	defaultKSMSetting = ksmAuto
+	ksmRunFile       = "run"
+	ksmPagesToScan   = "pages_to_scan"
+	ksmSleepMillisec = "sleep_millisecs"
+	ksmStart         = "1"
+	ksmStop          = "0"
+	defaultKSMMode   = ksmAuto
 )
 
 type sysfsAttribute struct {
@@ -218,7 +218,7 @@ type ksm struct {
 	initialSleepInterval string
 	initialKSMRun        string
 
-	currentKnob ksmSettingKnob
+	currentKnob ksmMode
 	kickChannel chan bool
 
 	sync.Mutex
@@ -378,14 +378,14 @@ func (k *ksm) tune(s ksmSetting) error {
 
 type ksmThrottleInterval struct {
 	interval time.Duration
-	nextKnob ksmSettingKnob
+	nextKnob ksmMode
 }
 
 var ksmAggressiveInterval = 30 * time.Second
 var ksmStandardInterval = 120 * time.Second
 var ksmSlowInterval = 120 * time.Second
 
-var ksmThrottleIntervals = map[ksmSettingKnob]ksmThrottleInterval{
+var ksmThrottleIntervals = map[ksmMode]ksmThrottleInterval{
 	ksmAggressive: {
 		// From aggressive: move to standard and wait 120s
 		interval: ksmStandardInterval,
@@ -419,6 +419,7 @@ func (k *ksm) throttle() {
 		for {
 			select {
 			case <-k.kickChannel:
+				proxyLog.Error("Throttle kicked")
 				// We got kicked, this means a new VM has been created.
 				// We will enter the aggressive setting until we throttle down.
 				_ = throttleTimer.Stop()

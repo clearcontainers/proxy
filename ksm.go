@@ -303,11 +303,9 @@ func newKSM(root string) (*ksm, error) {
 	return &k, nil
 }
 
-func (k *ksm) restore() error {
+// restoreSysFS is unlocked. You should take the ksm lock before calling it.
+func (k *ksm) restoreSysFS() error {
 	var err error
-
-	k.Lock()
-	defer k.Unlock()
 
 	if !k.initialized {
 		return errKSMUnavailable
@@ -322,6 +320,23 @@ func (k *ksm) restore() error {
 	}
 
 	if err = k.run.write(k.initialKSMRun); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (k *ksm) restore() error {
+	var err error
+
+	k.Lock()
+	defer k.Unlock()
+
+	if !k.initialized {
+		return errors.New("KSM is unavailable")
+	}
+
+	if err = k.restoreSysFS(); err != nil {
 		return err
 	}
 
@@ -400,8 +415,14 @@ var ksmThrottleIntervals = map[ksmMode]ksmThrottleInterval{
 	},
 
 	ksmSlow: {
-		// We stop at slow
+		// From slow: move to the initial settings and stop there
 		interval: 0,
+		nextKnob: ksmInitial,
+	},
+
+	// We should never make it here
+	ksmInitial: {
+		interval: 0, // We stay here unless a new container shows up
 	},
 }
 
@@ -441,7 +462,15 @@ func (k *ksm) throttle() {
 				// Our throttling down timer kicked in.
 				// We will move down to the next knob and start the next time,
 				// if necessary.
-				if ksmThrottleIntervals[k.currentKnob].interval == 0 {
+				var throttle = ksmThrottleIntervals[k.currentKnob]
+				if throttle.interval == 0 {
+					if throttle.nextKnob == ksmInitial {
+						k.Lock()
+						if err := k.restoreSysFS(); err != nil {
+							proxyLog.Error(err)
+						}
+						k.Unlock()
+					}
 					continue
 				}
 

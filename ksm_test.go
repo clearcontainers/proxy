@@ -122,6 +122,9 @@ func TestKSMSysfsAttributeReadWrite(t *testing.T) {
 }
 
 func initKSM(root string, t *testing.T) *ksm {
+	_, err := newKSM("")
+	assert.NotNil(t, err)
+
 	k, err := newKSM(root)
 	assert.Nil(t, err)
 
@@ -144,9 +147,9 @@ func TestKSMAnonPages(t *testing.T) {
 	pageSize := (int64)(os.Getpagesize())
 	expectedAnonPages := (anonPagesMemory * 1024) / pageSize
 
-	anonPages, err := anonPages()
+	anon, err := anonPages()
 	assert.Nil(t, err)
-	assert.Equal(t, expectedAnonPages, anonPages, "Anonymous pages mismatch")
+	assert.Equal(t, expectedAnonPages, anon, "Anonymous pages mismatch")
 }
 
 func TestKSMPagesToScan(t *testing.T) {
@@ -356,4 +359,121 @@ func TestKSMTune(t *testing.T) {
 		assert.NotNil(t, s)
 		assert.Equal(t, s, fmt.Sprintf("%v", v.scanIntervalMS), "Wrong sleep interval")
 	}
+}
+
+func TestKSMModeSet(t *testing.T) {
+	var k ksmMode
+	var err error
+
+	err = k.Set(string(ksmOff))
+	assert.Nil(t, err)
+	assert.Equal(t, k, ksmOff)
+
+	err = k.Set(string(ksmAuto))
+	assert.Nil(t, err)
+	assert.Equal(t, k, ksmAuto)
+
+	err = k.Set(string(ksmInitial))
+	assert.Nil(t, err)
+	assert.Equal(t, k, ksmInitial)
+
+	err = k.Set(string(ksmStandard))
+	assert.NotNil(t, err)
+
+	err = k.Set(fmt.Sprintf("%s,%s", ksmAuto, ksmOff))
+	assert.Nil(t, err)
+	assert.Equal(t, k, ksmAuto)
+}
+
+func TestKSMModeString(t *testing.T) {
+	var k ksmMode
+	var s string
+
+	k = ksmOff
+	s = string(k)
+	assert.Equal(t, string(k), s)
+
+	k = ksmInitial
+	s = string(k)
+	assert.Equal(t, string(k), s)
+
+	k = ksmAuto
+	s = string(k)
+	assert.Equal(t, string(k), s)
+}
+
+func boolString(b bool) string {
+	if b {
+		return "1"
+	}
+
+	return "0"
+}
+
+func TestKSMThrottle(t *testing.T) {
+	var err error
+	var s string
+
+	sleepIntervalSysFs := sysfsAttribute{
+		path: filepath.Join(defaultKSMRoot, ksmSleepMillisec),
+	}
+
+	runSysFs := sysfsAttribute{
+		path: filepath.Join(defaultKSMRoot, ksmRunFile),
+	}
+
+	err = sleepIntervalSysFs.open()
+	defer sleepIntervalSysFs.close()
+	assert.Nil(t, err)
+
+	err = runSysFs.open()
+	defer runSysFs.close()
+	assert.Nil(t, err)
+
+	k := initKSM(defaultKSMRoot, t)
+
+	// Let's make the throttling down faster, for quicker tests purpose.
+	ksmAggressiveInterval = 500 * time.Millisecond
+
+	k.throttle()
+	k.kick()
+
+	// We should now be in aggressive mode
+	time.Sleep(100 * time.Millisecond)
+	k.Lock()
+	assert.Equal(t, k.currentKnob, ksmAggressive)
+	k.Unlock()
+
+	// Let's check sysfs values are the aggressive ones
+	s, err = runSysFs.read()
+	assert.Nil(t, err)
+	assert.NotNil(t, s)
+	assert.Equal(t, boolString(ksmSettings[ksmAggressive].run), s, "Wrong sysfs read: %s", s)
+
+	s, err = sleepIntervalSysFs.read()
+	assert.Nil(t, err)
+	assert.NotNil(t, s)
+	assert.Equal(t, fmt.Sprintf("%d", ksmSettings[ksmAggressive].scanIntervalMS), s, "Wrong sysfs read: %s", s)
+
+	nextKnob := ksmThrottleIntervals[ksmAggressive].nextKnob
+	time.Sleep(ksmAggressiveInterval)
+
+	// Let's check for the next knob
+	time.Sleep(100 * time.Millisecond)
+	k.Lock()
+	assert.Equal(t, k.currentKnob, nextKnob)
+	expectedRun := boolString(ksmSettings[k.currentKnob].run)
+	expectedScan := ksmSettings[k.currentKnob].scanIntervalMS
+	k.Unlock()
+
+	// Let's check sysfs values are properly set
+	s, err = runSysFs.read()
+	assert.Nil(t, err)
+	assert.NotNil(t, s)
+	assert.Equal(t, expectedRun, s, "Wrong sysfs read: %s", s)
+
+	s, err = sleepIntervalSysFs.read()
+	assert.Nil(t, err)
+	assert.NotNil(t, s)
+	assert.Equal(t, fmt.Sprintf("%d", expectedScan), s, "Wrong sysfs read: %s", s)
 }

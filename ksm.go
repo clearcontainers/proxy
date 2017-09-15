@@ -101,11 +101,11 @@ type ksmMode string
 
 const (
 	ksmInitial    ksmMode = "initial"
-	ksmOff                = "off"
-	ksmSlow               = "slow"
-	ksmStandard           = "standard"
-	ksmAggressive         = "aggressive"
-	ksmAuto               = "auto"
+	ksmOff        ksmMode = "off"
+	ksmSlow       ksmMode = "slow"
+	ksmStandard   ksmMode = "standard"
+	ksmAggressive ksmMode = "aggressive"
+	ksmAuto       ksmMode = "auto"
 )
 
 var ksmSettings = map[ksmMode]ksmSetting{

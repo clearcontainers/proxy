@@ -572,6 +572,9 @@ func newProxy() *proxy {
 //   ${locatestatedir}/run/cc-oci-runtime/proxy
 var DefaultSocketPath string
 
+// CC 2.1 socket path.
+var legacySocketPath = "/var/run/cc-oci-runtime/proxy.sock"
+
 // ArgSocketPath is populated at runtime from the option -socket-path
 var ArgSocketPath = flag.String("socket-path", "", "specify path to socket file")
 
@@ -583,7 +586,7 @@ func getSocketPath() (string, error) {
 	// populate DefaultSocketPath, so fallback to a reasonable
 	// path. People should really use the Makefile though.
 	if DefaultSocketPath == "" {
-		DefaultSocketPath = "/var/run/cc-oci-runtime/proxy.sock"
+		DefaultSocketPath = legacySocketPath
 	}
 
 	socketPath := DefaultSocketPath

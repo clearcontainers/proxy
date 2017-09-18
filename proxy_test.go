@@ -902,3 +902,30 @@ func TestHyperstartResponse(t *testing.T) {
 
 	rig.Stop()
 }
+
+func TestGetSocketPath(t *testing.T) {
+	p, err := getSocketPath()
+	assert.Nil(t, err)
+	assert.Equal(t, p, legacySocketPath)
+
+	// Test for default socket path
+	DefaultSocketPath = "/proxy/socket/path"
+	p, err = getSocketPath()
+	assert.Nil(t, err, err)
+	assert.Equal(t, p, DefaultSocketPath)
+
+	// Test that a passed socket path takes precedence
+	var cliSocketPath = "/cli/proxy/socket/path"
+	ArgSocketPath = &cliSocketPath
+	p, err = getSocketPath()
+	assert.Nil(t, err, err)
+	assert.Equal(t, p, cliSocketPath)
+
+	// Test for too long socket paths
+	longPath := make([]byte, socketPathMaxLength+1)
+	cliSocketPath = string(longPath)
+	ArgSocketPath = &cliSocketPath
+	p, err = getSocketPath()
+	assert.NotNil(t, err, err)
+	assert.Equal(t, p, "")
+}

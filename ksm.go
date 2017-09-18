@@ -312,7 +312,7 @@ func startKSM(root string, mode ksmMode) (*ksm, error) {
 
 	// We just no-op if going for initial settings
 	if mode != ksmInitial {
-		// we want to catch termination to restore the initial sysfs values
+		// We want to catch termination to restore the initial sysfs values
 		c := make(chan os.Signal, 2)
 		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 

@@ -410,9 +410,11 @@ func boolString(b bool) string {
 	return "0"
 }
 
-func TestKSMThrottle(t *testing.T) {
+func testThrottle(k *ksm, t *testing.T) {
 	var err error
 	var s string
+
+	assert.NotNil(t, k)
 
 	sleepIntervalSysFs := sysfsAttribute{
 		path: filepath.Join(defaultKSMRoot, ksmSleepMillisec),
@@ -430,15 +432,7 @@ func TestKSMThrottle(t *testing.T) {
 	defer runSysFs.close()
 	assert.Nil(t, err)
 
-	k := initKSM(defaultKSMRoot, t)
-
-	// Let's make the throttling down faster, for quicker tests purpose.
-	ksmAggressiveInterval = 500 * time.Millisecond
-
-	k.throttle()
-	k.kick()
-
-	// We should now be in aggressive mode
+	// We should first be in aggressive mode
 	time.Sleep(100 * time.Millisecond)
 	k.Lock()
 	assert.Equal(t, k.currentKnob, ksmAggressive)
@@ -476,4 +470,98 @@ func TestKSMThrottle(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, s)
 	assert.Equal(t, fmt.Sprintf("%d", expectedScan), s, "Wrong sysfs read: %s", s)
+}
+
+func TestKSMThrottle(t *testing.T) {
+	k := initKSM(defaultKSMRoot, t)
+
+	// Let's make the throttling down faster, for quicker tests purpose.
+	ksmAggressiveInterval = 500 * time.Millisecond
+
+	k.throttle()
+	k.kick()
+
+	testThrottle(k, t)
+}
+
+func TestKSMStartInitialMode(t *testing.T) {
+	var err error
+
+	sleepIntervalSysFs := sysfsAttribute{
+		path: filepath.Join(defaultKSMRoot, ksmSleepMillisec),
+	}
+
+	runSysFs := sysfsAttribute{
+		path: filepath.Join(defaultKSMRoot, ksmRunFile),
+	}
+
+	err = sleepIntervalSysFs.open()
+	defer sleepIntervalSysFs.close()
+	assert.Nil(t, err)
+
+	err = runSysFs.open()
+	defer runSysFs.close()
+	assert.Nil(t, err)
+
+	initialRun, err := runSysFs.read()
+	assert.Nil(t, err)
+	assert.NotNil(t, initialRun)
+
+	initialSleep, err := sleepIntervalSysFs.read()
+	assert.Nil(t, err)
+	assert.NotNil(t, initialSleep)
+
+	k, err := startKSM(defaultKSMRoot, ksmInitial)
+	assert.Nil(t, err)
+	assert.NotNil(t, k)
+
+	newRun, err := runSysFs.read()
+	assert.Nil(t, err)
+	assert.NotNil(t, newRun)
+	assert.Equal(t, newRun, initialRun, "Run sysfs attribute modified")
+
+	newSleep, err := sleepIntervalSysFs.read()
+	assert.Nil(t, err)
+	assert.NotNil(t, newSleep)
+	assert.Equal(t, newSleep, initialSleep, "Sleep sysfs attribute modified")
+}
+
+func TestKSMStartAutoMode(t *testing.T) {
+	// Let's make the throttling down faster, for quicker tests purpose.
+	ksmAggressiveInterval = 500 * time.Millisecond
+
+	k, err := startKSM(defaultKSMRoot, ksmAuto)
+	assert.Nil(t, err)
+	assert.NotNil(t, k)
+
+	k.kick()
+
+	testThrottle(k, t)
+}
+
+func TestKSMStartOffMode(t *testing.T) {
+	var err error
+
+	runSysFs := sysfsAttribute{
+		path: filepath.Join(defaultKSMRoot, ksmRunFile),
+	}
+
+	err = runSysFs.open()
+	defer runSysFs.close()
+	assert.Nil(t, err)
+
+	k, err := startKSM(defaultKSMRoot, ksmOff)
+	assert.Nil(t, err)
+	assert.NotNil(t, k)
+
+	s, err := runSysFs.read()
+	assert.Nil(t, err)
+	assert.NotNil(t, s)
+	assert.Equal(t, s, ksmStop, "KSM not stopped")
+}
+
+func TestKSMStartInvalidMode(t *testing.T) {
+	k, err := startKSM(defaultKSMRoot, "foo")
+	assert.NotNil(t, k)
+	assert.NotNil(t, err)
 }

@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -301,6 +302,41 @@ func newKSM(root string) (*ksm, error) {
 	k.kickChannel = make(chan bool)
 
 	return &k, nil
+}
+
+func startKSM(root string, mode ksmMode) (*ksm, error) {
+	k, err := newKSM(root)
+	if err != nil {
+		return k, err
+	}
+
+	// We just no-op if going for initial settings
+	if mode != ksmInitial {
+		// we want to catch termination to restore the initial sysfs values
+		c := make(chan os.Signal, 2)
+		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+
+		go func() {
+			<-c
+			_ = k.restore()
+			os.Exit(0)
+		}()
+
+		if mode == ksmAuto {
+			k.throttle()
+		} else {
+			setting, ok := ksmSettings[mode]
+			if !ok {
+				return k, fmt.Errorf("Invalide KSM mode %v", mode)
+			}
+
+			if err := k.tune(setting); err != nil {
+				return k, err
+			}
+		}
+	}
+
+	return k, nil
 }
 
 // restoreSysFS is unlocked. You should take the ksm lock before calling it.

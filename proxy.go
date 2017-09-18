@@ -25,7 +25,6 @@ import (
 	_ "net/http/pprof"
 	"net/url"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -707,29 +706,15 @@ func proxyMain() {
 		os.Exit(1)
 	}
 
-	// Tune KSM if available
-	proxyKSM, err = newKSM(defaultKSMRoot)
+	// Init and tune KSM if available
+	proxyKSM, err = startKSM(defaultKSMRoot, proxyKSMMode)
 	if err != nil {
+		// KSM failure should not be fatal
 		fmt.Fprintln(os.Stderr, "init:", err.Error())
 	} else {
-		c := make(chan os.Signal, 2)
-		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-
-		go func() {
-			<-c
+		defer func() {
 			_ = proxyKSM.restore()
-			os.Exit(0)
 		}()
-
-		if proxyKSMMode != ksmInitial {
-			if proxyKSMMode == ksmAuto {
-				proxyKSM.throttle()
-			} else {
-				if err := proxyKSM.tune(ksmSettings[proxyKSMMode]); err != nil {
-					fmt.Fprintln(os.Stderr, "init:", err.Error())
-				}
-			}
-		}
 	}
 
 	proxy.serve()
@@ -743,8 +728,6 @@ func proxyMain() {
 	// That said, this wait group is used in the tests to ensure proper
 	// serialisation between runs of proxyMain()(see proxy/proxy_test.go).
 	proxy.wg.Wait()
-
-	_ = proxyKSM.restore()
 }
 
 // SetLoggingLevel sets the logging level for the whole application. The values

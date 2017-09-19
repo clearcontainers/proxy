@@ -18,6 +18,9 @@
 
 set -e
 
+# Run unit testing
+sudo -E PATH=$PATH bash -c "make check"
+
 # Current docker tests:
 # TODO: Move these docker commands to more formal tests in 
 # `clearcontainers/tests` repository. See issue: 

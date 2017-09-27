@@ -4,7 +4,14 @@ script_dir=$(cd `dirname $0`; pwd)
 root_dir=`dirname $script_dir`
 
 test_packages=('.;.,./client' './api;./api')
-go_test_flags="-v -race -timeout 2s"
+
+# Set default test run timeout value.
+#
+# CC_GO_TEST_TIMEOUT can be set to any value accepted by
+# "go test -timeout X"
+timeout_value=${CC_GO_TEST_TIMEOUT:-10s}
+
+go_test_flags="-v -race -timeout $timeout_value"
 
 echo Running go test on packages "'$test_packages'" with flags "'$go_test_flags'"
 

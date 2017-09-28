@@ -26,6 +26,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -344,7 +346,14 @@ func hyper(data []byte, userData interface{}, response *handlerResponse) {
 		return
 	}
 
-	client.log.Infof("hyper(cmd=%s, data=%s)", hyper.HyperName, hyper.Data)
+	cmdStr := strconv.Quote(hyper.HyperName)
+	dataStr := strconv.Quote(string(hyper.Data))
+
+	// this looks odd, but it's the only way to guarantee the data from
+	// the agent is logged in a way that is parseable by logfmt parsers.
+	msg := fmt.Sprintf("hyper(cmd=%s, data=%s)", cmdStr, dataStr)
+	quoted := strconv.Quote(msg)
+	client.log.Infof(strings.Trim(quoted, "\""))
 
 	data, err := vm.SendMessage(&hyper)
 	response.SetData(data)

@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -266,7 +268,10 @@ func (vm *vm) ioHyperToClients() {
 func (vm *vm) consoleToLog() {
 	scanner := bufio.NewScanner(vm.console.conn)
 	for scanner.Scan() {
-		vm.logQemu.Debug(scanner.Text())
+		// It's essential to ensure the text is quoted to avoid
+		// tripping up log parsers.
+		quoted := fmt.Sprintf("%s", strconv.Quote(scanner.Text()))
+		vm.logQemu.Debug(strings.Trim(quoted, "\""))
 	}
 
 	vm.wg.Done()

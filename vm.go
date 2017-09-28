@@ -177,7 +177,14 @@ func (vm *vm) dump(data []byte) {
 		return
 	}
 
-	proxyLog.WithField("wm", vm.containerID).Debug("\n", hex.Dump(data))
+	// Format data across multiple lines in hex.
+	//
+	// This isn't ideal as each log entry should refer to a unique entity
+	// but this particular data is pretty-printed for human-consumption.
+	hexLines := strings.Split(hex.Dump(data), "\n")
+	for _, x := range hexLines {
+		proxyLog.WithField("wm", vm.containerID).Debug(x)
+	}
 }
 
 func (vm *vm) findSessionBySeq(seq uint64) *ioSession {

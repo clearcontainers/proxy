@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -175,7 +177,14 @@ func (vm *vm) dump(data []byte) {
 		return
 	}
 
-	proxyLog.WithField("wm", vm.containerID).Debug("\n", hex.Dump(data))
+	// Format data across multiple lines in hex.
+	//
+	// This isn't ideal as each log entry should refer to a unique entity
+	// but this particular data is pretty-printed for human-consumption.
+	hexLines := strings.Split(hex.Dump(data), "\n")
+	for _, x := range hexLines {
+		proxyLog.WithField("wm", vm.containerID).Debug(x)
+	}
 }
 
 func (vm *vm) findSessionBySeq(seq uint64) *ioSession {
@@ -266,7 +275,10 @@ func (vm *vm) ioHyperToClients() {
 func (vm *vm) consoleToLog() {
 	scanner := bufio.NewScanner(vm.console.conn)
 	for scanner.Scan() {
-		vm.logQemu.Debug(scanner.Text())
+		// It's essential to ensure the text is quoted to avoid
+		// tripping up log parsers.
+		quoted := fmt.Sprintf("%s", strconv.Quote(scanner.Text()))
+		vm.logQemu.Debug(strings.Trim(quoted, "\""))
 	}
 
 	vm.wg.Done()

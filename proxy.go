@@ -31,6 +31,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/clearcontainers/proxy/api"
@@ -764,6 +765,21 @@ func SetLoggingLevel(l string) error {
 	return nil
 }
 
+// SetLoggingParams configures the logger
+func SetLoggingParams(logLevel string) error {
+	err := SetLoggingLevel(logLevel)
+	if err != nil {
+		return err
+	}
+
+	// enable nanosecond timestamps
+	proxyLog.Logger.Formatter = &logrus.TextFormatter{
+		TimestampFormat: time.RFC3339Nano,
+	}
+
+	return nil
+}
+
 type profiler struct {
 	enabled bool
 	host    string
@@ -808,7 +824,7 @@ func main() {
 
 	flag.Parse()
 
-	if err := SetLoggingLevel(*logLevel); err != nil {
+	if err := SetLoggingParams(*logLevel); err != nil {
 		logrus.Fatal(err)
 	}
 

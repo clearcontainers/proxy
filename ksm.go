@@ -530,17 +530,19 @@ func (k *ksm) throttle() {
 // kick gets us back to the aggressive setting
 func (k *ksm) kick() {
 	k.Lock()
-	defer k.Unlock()
 
 	if !k.initialized {
 		proxyLog.Error(errors.New("KSM is unavailable"))
+		k.Unlock()
 		return
 	}
 
 	// If we're not throttling, we must not kick.
 	if !k.throttling {
+		k.Unlock()
 		return
 	}
 
+	k.Unlock()
 	k.kickChannel <- true
 }

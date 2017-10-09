@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -617,6 +618,9 @@ func getSocketPath() (string, error) {
 func (proxy *proxy) init() error {
 	var l net.Listener
 	var err error
+
+	// Force a coredump + full stacktrace on internal error
+	debug.SetTraceback("crash")
 
 	// flags
 	proxy.enableVMConsole = logrus.GetLevel() == logrus.DebugLevel

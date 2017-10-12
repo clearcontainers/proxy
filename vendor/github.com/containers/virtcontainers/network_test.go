@@ -22,7 +22,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/containernetworking/cni/pkg/ns"
+	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 )
@@ -307,25 +307,7 @@ func TestGetIfacesFromNetNsSuccessfulBridge(t *testing.T) {
 		},
 	}
 
-	expected := []netIfaceAddrs{
-		{
-			iface: net.Interface{
-				Index: 1,
-				MTU:   65536,
-				Name:  "lo",
-				Flags: net.FlagLoopback,
-			},
-		},
-		{
-			iface: net.Interface{
-				Index:        2,
-				MTU:          testMTU,
-				Name:         testNetIface,
-				HardwareAddr: hwAddr,
-				Flags:        net.FlagBroadcast | net.FlagMulticast,
-			},
-		},
-	}
+	expected := []netIfaceAddrs(nil)
 
 	testGetIfacesFromNetNsSuccessful(t, link, expected)
 }

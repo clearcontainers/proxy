@@ -117,6 +117,13 @@ type agent interface {
 	// to handle all other Agent interface methods.
 	init(pod *Pod, config interface{}) error
 
+	// capabilities should return a structure that specifies the capabilities
+	// supported by the agent.
+	capabilities() capabilities
+
+	// createPod will tell the agent to perform necessary setup for a Pod.
+	createPod(pod *Pod) error
+
 	// exec will tell the agent to run a command in an already running container.
 	exec(pod *Pod, c Container, process Process, cmd Cmd) error
 
@@ -135,6 +142,8 @@ type agent interface {
 	// stopContainer will tell the agent to stop a container related to a Pod.
 	stopContainer(pod Pod, c Container) error
 
-	// killContainer will tell the agent to send a signal to a container related to a Pod.
-	killContainer(pod Pod, c Container, signal syscall.Signal) error
+	// killContainer will tell the agent to send a signal to a
+	// container related to a Pod. If all is true, all processes in
+	// the container will be sent the signal.
+	killContainer(pod Pod, c Container, signal syscall.Signal, all bool) error
 }

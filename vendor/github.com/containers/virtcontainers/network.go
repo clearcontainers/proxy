@@ -21,12 +21,19 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"runtime"
 
 	"github.com/01org/ciao/ssntp/uuid"
-	"github.com/containernetworking/cni/pkg/ns"
 	types "github.com/containernetworking/cni/pkg/types/current"
+	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
+)
+
+// Introduces constants related to network routes.
+const (
+	defaultRouteDest  = "0.0.0.0/0"
+	defaultRouteLabel = "default"
 )
 
 type netIfaceAddrs struct {
@@ -62,8 +69,9 @@ type Endpoint struct {
 
 // NetworkNamespace contains all data related to its network namespace.
 type NetworkNamespace struct {
-	NetNsPath string
-	Endpoints []Endpoint
+	NetNsPath    string
+	NetNsCreated bool
+	Endpoints    []Endpoint
 }
 
 // NetworkModel describes the type of network specification.
@@ -125,13 +133,67 @@ func newNetwork(networkType NetworkModel) network {
 	}
 }
 
+func initNetworkCommon(config NetworkConfig) (string, bool, error) {
+	if config.NetNSPath == "" {
+		path, err := createNetNS()
+		if err != nil {
+			return "", false, err
+		}
+
+		return path, true, nil
+	}
+
+	return config.NetNSPath, false, nil
+}
+
+func runNetworkCommon(networkNSPath string, cb func() error) error {
+	if networkNSPath == "" {
+		return fmt.Errorf("networkNSPath cannot be empty")
+	}
+
+	return doNetNS(networkNSPath, func(_ ns.NetNS) error {
+		return cb()
+	})
+}
+
+func addNetworkCommon(pod Pod, networkNS *NetworkNamespace) error {
+	err := doNetNS(networkNS.NetNsPath, func(_ ns.NetNS) error {
+		for idx := range networkNS.Endpoints {
+			if err := bridgeNetworkPair(&(networkNS.Endpoints[idx].NetPair)); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	return addNetDevHypervisor(pod, networkNS.Endpoints)
+}
+
+func removeNetworkCommon(networkNS NetworkNamespace) error {
+	return doNetNS(networkNS.NetNsPath, func(_ ns.NetNS) error {
+		for _, endpoint := range networkNS.Endpoints {
+			err := unBridgeNetworkPair(endpoint.NetPair)
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+}
+
 func createLink(netHandle *netlink.Handle, name string, expectedLink netlink.Link) (netlink.Link, error) {
 	var newLink netlink.Link
 
 	switch expectedLink.Type() {
 	case (&netlink.Bridge{}).Type():
 		newLink = &netlink.Bridge{
-			LinkAttrs: netlink.LinkAttrs{Name: name},
+			LinkAttrs:         netlink.LinkAttrs{Name: name},
+			MulticastSnooping: expectedLink.(*netlink.Bridge).MulticastSnooping,
 		}
 	case (&netlink.Tuntap{}).Type():
 		newLink = &netlink.Tuntap{
@@ -175,7 +237,7 @@ func getLinkByName(netHandle *netlink.Handle, name string, expectedLink netlink.
 	return nil, fmt.Errorf("Incorrect link type %s, expecting %s", link.Type(), expectedLink.Type())
 }
 
-func bridgeNetworkPair(netPair NetworkInterfacePair) error {
+func bridgeNetworkPair(netPair *NetworkInterfacePair) error {
 	netHandle, err := netlink.NewHandle()
 	if err != nil {
 		return err
@@ -192,6 +254,19 @@ func bridgeNetworkPair(netPair NetworkInterfacePair) error {
 		return fmt.Errorf("Could not get veth interface: %s", err)
 	}
 
+	vethLinkAttrs := vethLink.Attrs()
+
+	// Save the veth MAC address to the TAP so that it can later be used
+	// to build the hypervisor command line. This MAC address has to be
+	// the one inside the VM in order to avoid any firewall issues. The
+	// bridge created by the network plugin on the host actually expects
+	// to see traffic from this MAC address and not another one.
+	netPair.TAPIface.HardAddr = vethLinkAttrs.HardwareAddr.String()
+
+	if err := netHandle.LinkSetMTU(tapLink, vethLinkAttrs.MTU); err != nil {
+		return fmt.Errorf("Could not set TAP MTU %d: %s", vethLinkAttrs.MTU, err)
+	}
+
 	hardAddr, err := net.ParseMAC(netPair.VirtIface.HardAddr)
 	if err != nil {
 		return err
@@ -201,7 +276,8 @@ func bridgeNetworkPair(netPair NetworkInterfacePair) error {
 			netPair.VirtIface.HardAddr, netPair.VirtIface.Name, err)
 	}
 
-	bridgeLink, err := createLink(netHandle, netPair.Name, &netlink.Bridge{})
+	mcastSnoop := false
+	bridgeLink, err := createLink(netHandle, netPair.Name, &netlink.Bridge{MulticastSnooping: &mcastSnoop})
 	if err != nil {
 		return fmt.Errorf("Could not create bridge: %s", err)
 	}
@@ -243,11 +319,6 @@ func unBridgeNetworkPair(netPair NetworkInterfacePair) error {
 		return fmt.Errorf("Could not get TAP interface: %s", err)
 	}
 
-	vethLink, err := getLinkByName(netHandle, netPair.VirtIface.Name, &netlink.Veth{})
-	if err != nil {
-		return fmt.Errorf("Could not get veth interface: %s", err)
-	}
-
 	bridgeLink, err := getLinkByName(netHandle, netPair.Name, &netlink.Bridge{})
 	if err != nil {
 		return fmt.Errorf("Could not get bridge interface: %s", err)
@@ -255,14 +326,6 @@ func unBridgeNetworkPair(netPair NetworkInterfacePair) error {
 
 	if err := netHandle.LinkSetDown(bridgeLink); err != nil {
 		return fmt.Errorf("Could not disable bridge %s: %s", netPair.Name, err)
-	}
-
-	if err := netHandle.LinkSetDown(vethLink); err != nil {
-		return fmt.Errorf("Could not disable veth %s: %s", netPair.VirtIface.Name, err)
-	}
-
-	if err := netHandle.LinkSetNoMaster(vethLink); err != nil {
-		return fmt.Errorf("Could not detach veth %s: %s", netPair.VirtIface.Name, err)
 	}
 
 	if err := netHandle.LinkSetDown(tapLink); err != nil {
@@ -279,6 +342,21 @@ func unBridgeNetworkPair(netPair NetworkInterfacePair) error {
 
 	if err := netHandle.LinkDel(tapLink); err != nil {
 		return fmt.Errorf("Could not remove TAP %s: %s", netPair.TAPIface.Name, err)
+	}
+
+	vethLink, err := getLinkByName(netHandle, netPair.VirtIface.Name, &netlink.Veth{})
+	if err != nil {
+		// The veth pair is not totally managed by virtcontainers
+		virtLog.Warn("Could not get veth interface: %s", err)
+	} else {
+		if err := netHandle.LinkSetDown(vethLink); err != nil {
+			return fmt.Errorf("Could not disable veth %s: %s", netPair.VirtIface.Name, err)
+		}
+
+		if err := netHandle.LinkSetNoMaster(vethLink); err != nil {
+			return fmt.Errorf("Could not detach veth %s: %s", netPair.VirtIface.Name, err)
+		}
+
 	}
 
 	return nil
@@ -302,24 +380,13 @@ func setNetNS(netNSPath string) error {
 	return n.Set()
 }
 
-// doNetNS makes some subsequent calls to a go routine and LockOSThread
-// in order to protect the current process from other thread switching
-// to different netns. Unless we have to make sure the thread ID has to
-// stay the same, this function should be used by default.
+// doNetNS is free from any call to a go routine, and it calls
+// into runtime.LockOSThread(), meaning it won't be executed in a
+// different thread than the one expected by the caller.
 func doNetNS(netNSPath string, cb func(ns.NetNS) error) error {
-	n, err := ns.GetNS(netNSPath)
-	if err != nil {
-		return err
-	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 
-	return n.Do(cb)
-}
-
-// safeDoNetNS is free from any call to a go routine, meaning it will
-// not be executed in a different thread than the one expected by the
-// caller. This is used in case of CNM network, because we need to
-// make sure the process switched to the given netns has PID == TID.
-func safeDoNetNS(netNSPath string, cb func(ns.NetNS) error) error {
 	currentNS, err := ns.GetCurrentNS()
 	if err != nil {
 		return err
@@ -432,6 +499,15 @@ func getIfacesFromNetNs(networkNSPath string) ([]netIfaceAddrs, error) {
 				return err
 			}
 
+			// Ignore unconfigured network interfaces
+			// These are either base tunnel devices
+			// that are not namespaced like
+			// gre0, gretap0, sit0, ipip0, tunl0
+			// or incorrectly setup interfaces
+			if (addrs == nil) || (len(addrs) == 0) {
+				continue
+			}
+
 			netIface := netIfaceAddrs{
 				iface: iface,
 				addrs: addrs,
@@ -468,13 +544,13 @@ func addNetDevHypervisor(pod Pod, endpoints []Endpoint) error {
 // between VM netns and the host network physical interface.
 type network interface {
 	// init initializes the network, setting a new network namespace.
-	init(config *NetworkConfig) error
+	init(config NetworkConfig) (string, bool, error)
 
 	// run runs a callback function in a specified network namespace.
 	run(networkNSPath string, cb func() error) error
 
 	// add adds all needed interfaces inside the network namespace.
-	add(pod Pod, config NetworkConfig) (NetworkNamespace, error)
+	add(pod Pod, config NetworkConfig, netNsPath string, netNsCreated bool) (NetworkNamespace, error)
 
 	// remove unbridges and deletes TAP interfaces. It also removes virtual network
 	// interfaces and deletes the network namespace.

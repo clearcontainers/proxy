@@ -20,8 +20,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"syscall"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 const (
@@ -29,6 +33,16 @@ const (
 	testHyperstartPauseBinName = "pause"
 	containerID                = "1"
 )
+
+var podAnnotations = map[string]string{
+	"pod.foo":   "pod.bar",
+	"pod.hello": "pod.world",
+}
+
+var containerAnnotations = map[string]string{
+	"container.foo":   "container.bar",
+	"container.hello": "container.world",
+}
 
 func newBasicTestCmd() Cmd {
 	envs := []EnvVar{
@@ -50,9 +64,10 @@ func newBasicTestCmd() Cmd {
 func newTestPodConfigNoop() PodConfig {
 	// Define the container command and bundle.
 	container := ContainerConfig{
-		ID:     containerID,
-		RootFs: filepath.Join(testDir, testBundle),
-		Cmd:    newBasicTestCmd(),
+		ID:          containerID,
+		RootFs:      filepath.Join(testDir, testBundle),
+		Cmd:         newBasicTestCmd(),
+		Annotations: containerAnnotations,
 	}
 
 	// Sets the hypervisor configuration.
@@ -70,6 +85,8 @@ func newTestPodConfigNoop() PodConfig {
 		AgentType: NoopAgentType,
 
 		Containers: []ContainerConfig{container},
+
+		Annotations: podAnnotations,
 	}
 
 	return podConfig
@@ -78,9 +95,10 @@ func newTestPodConfigNoop() PodConfig {
 func newTestPodConfigHyperstartAgent() PodConfig {
 	// Define the container command and bundle.
 	container := ContainerConfig{
-		ID:     containerID,
-		RootFs: filepath.Join(testDir, testBundle),
-		Cmd:    newBasicTestCmd(),
+		ID:          containerID,
+		RootFs:      filepath.Join(testDir, testBundle),
+		Cmd:         newBasicTestCmd(),
+		Annotations: containerAnnotations,
 	}
 
 	// Sets the hypervisor configuration.
@@ -106,7 +124,8 @@ func newTestPodConfigHyperstartAgent() PodConfig {
 		AgentType:   HyperstartAgent,
 		AgentConfig: agentConfig,
 
-		Containers: []ContainerConfig{container},
+		Containers:  []ContainerConfig{container},
+		Annotations: podAnnotations,
 	}
 
 	return podConfig
@@ -115,9 +134,10 @@ func newTestPodConfigHyperstartAgent() PodConfig {
 func newTestPodConfigHyperstartAgentCNINetwork() PodConfig {
 	// Define the container command and bundle.
 	container := ContainerConfig{
-		ID:     containerID,
-		RootFs: filepath.Join(testDir, testBundle),
-		Cmd:    newBasicTestCmd(),
+		ID:          containerID,
+		RootFs:      filepath.Join(testDir, testBundle),
+		Cmd:         newBasicTestCmd(),
+		Annotations: containerAnnotations,
 	}
 
 	// Sets the hypervisor configuration.
@@ -150,7 +170,8 @@ func newTestPodConfigHyperstartAgentCNINetwork() PodConfig {
 		NetworkModel:  CNINetworkModel,
 		NetworkConfig: netConfig,
 
-		Containers: []ContainerConfig{container},
+		Containers:  []ContainerConfig{container},
+		Annotations: podAnnotations,
 	}
 
 	return podConfig
@@ -159,9 +180,10 @@ func newTestPodConfigHyperstartAgentCNINetwork() PodConfig {
 func newTestPodConfigHyperstartAgentCNMNetwork() PodConfig {
 	// Define the container command and bundle.
 	container := ContainerConfig{
-		ID:     containerID,
-		RootFs: filepath.Join(testDir, testBundle),
-		Cmd:    newBasicTestCmd(),
+		ID:          containerID,
+		RootFs:      filepath.Join(testDir, testBundle),
+		Cmd:         newBasicTestCmd(),
+		Annotations: containerAnnotations,
 	}
 
 	// Sets the hypervisor configuration.
@@ -182,7 +204,7 @@ func newTestPodConfigHyperstartAgentCNMNetwork() PodConfig {
 	hooks := Hooks{
 		PreStartHooks: []Hook{
 			{
-				Path: testBinHookPath,
+				Path: getMockHookBinPath(),
 				Args: []string{testKeyHook, testContainerIDHook, testControllerIDHook},
 			},
 		},
@@ -207,7 +229,8 @@ func newTestPodConfigHyperstartAgentCNMNetwork() PodConfig {
 		NetworkModel:  CNMNetworkModel,
 		NetworkConfig: netConfig,
 
-		Containers: []ContainerConfig{container},
+		Containers:  []ContainerConfig{container},
+		Annotations: podAnnotations,
 	}
 
 	return podConfig
@@ -223,7 +246,7 @@ func TestCreatePodNoopAgentSuccessful(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	podDir := filepath.Join(configStoragePath, p.id)
+	podDir := filepath.Join(configStoragePath, p.ID())
 	_, err = os.Stat(podDir)
 	if err != nil {
 		t.Fatal(err)
@@ -240,7 +263,7 @@ func TestCreatePodHyperstartAgentSuccessful(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	podDir := filepath.Join(configStoragePath, p.id)
+	podDir := filepath.Join(configStoragePath, p.ID())
 	_, err = os.Stat(podDir)
 	if err != nil {
 		t.Fatal(err)
@@ -268,13 +291,13 @@ func TestDeletePodNoopAgentSuccessful(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	podDir := filepath.Join(configStoragePath, p.id)
+	podDir := filepath.Join(configStoragePath, p.ID())
 	_, err = os.Stat(podDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	p, err = DeletePod(p.id)
+	p, err = DeletePod(p.ID())
 	if p == nil || err != nil {
 		t.Fatal(err)
 	}
@@ -295,13 +318,13 @@ func TestDeletePodHyperstartAgentSuccessful(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	podDir := filepath.Join(configStoragePath, p.id)
+	podDir := filepath.Join(configStoragePath, p.ID())
 	_, err = os.Stat(podDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	p, err = DeletePod(p.id)
+	p, err = DeletePod(p.ID())
 	if p == nil || err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +382,10 @@ func TestStartPodHyperstartAgentSuccessful(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p.agent.(*hyper).bindUnmountAllRootfs(*p)
+	pImpl, ok := p.(*Pod)
+	assert.True(t, ok)
+
+	pImpl.agent.(*hyper).bindUnmountAllRootfs(*pImpl)
 
 	err = os.Remove(pauseBinPath)
 	if err != nil {
@@ -389,9 +415,68 @@ func TestStopPodNoopAgentSuccessful(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p, err = StopPod(p.id)
+	vp, err := StopPod(p.ID())
+	if vp == nil || err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPauseThenResumePodNoopAgentSuccessful(t *testing.T) {
+	cleanUp()
+
+	config := newTestPodConfigNoop()
+
+	p, _, err := createAndStartPod(config)
 	if p == nil || err != nil {
 		t.Fatal(err)
+	}
+
+	contID := "100"
+	contConfig := newTestContainerConfigNoop(contID)
+
+	_, c, err := CreateContainer(p.ID(), contConfig)
+	if c == nil || err != nil {
+		t.Fatal(err)
+	}
+
+	p, err = PausePod(p.ID())
+	if p == nil || err != nil {
+		t.Fatal(err)
+	}
+
+	pImpl, ok := p.(*Pod)
+	assert.True(t, ok)
+
+	expectedState := StatePaused
+
+	assert.Equal(t, pImpl.state.State, expectedState, "unexpected paused pod state")
+
+	for i, c := range p.GetAllContainers() {
+		cImpl, ok := c.(*Container)
+		assert.True(t, ok)
+
+		assert.Equal(t, expectedState, cImpl.state.State,
+			fmt.Sprintf("paused container %d has unexpected state", i))
+	}
+
+	p, err = ResumePod(p.ID())
+	if p == nil || err != nil {
+		t.Fatal(err)
+	}
+
+	pImpl, ok = p.(*Pod)
+	assert.True(t, ok)
+
+	expectedState = StateRunning
+
+	assert.Equal(t, pImpl.state.State, expectedState, "unexpected resumed pod state")
+
+	for i, c := range p.GetAllContainers() {
+		cImpl, ok := c.(*Container)
+		assert.True(t, ok)
+
+		assert.Equal(t, cImpl.state.State, expectedState,
+			fmt.Sprintf("resumed container %d has unexpected state", i))
 	}
 }
 
@@ -419,7 +504,7 @@ func TestStopPodHyperstartAgentSuccessful(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p, err = StopPod(p.id)
+	p, err = StopPod(p.ID())
 	if p == nil || err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +537,7 @@ func TestRunPodNoopAgentSuccessful(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	podDir := filepath.Join(configStoragePath, p.id)
+	podDir := filepath.Join(configStoragePath, p.ID())
 	_, err = os.Stat(podDir)
 	if err != nil {
 		t.Fatal(err)
@@ -483,13 +568,16 @@ func TestRunPodHyperstartAgentSuccessful(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	podDir := filepath.Join(configStoragePath, p.id)
+	podDir := filepath.Join(configStoragePath, p.ID())
 	_, err = os.Stat(podDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	p.agent.(*hyper).bindUnmountAllRootfs(*p)
+	pImpl, ok := p.(*Pod)
+	assert.True(t, ok)
+
+	pImpl.agent.(*hyper).bindUnmountAllRootfs(*pImpl)
 
 	err = os.Remove(pauseBinPath)
 	if err != nil {
@@ -537,19 +625,114 @@ func TestListPodNoPodDirectory(t *testing.T) {
 	}
 }
 
-func TestStatusPodSuccessful(t *testing.T) {
+func TestStatusPodSuccessfulStateReady(t *testing.T) {
 	cleanUp()
 
 	config := newTestPodConfigNoop()
+	hypervisorConfig := HypervisorConfig{
+		KernelPath:     filepath.Join(testDir, testKernel),
+		ImagePath:      filepath.Join(testDir, testImage),
+		HypervisorPath: filepath.Join(testDir, testHypervisor),
+	}
+
+	expectedStatus := PodStatus{
+		ID: testPodID,
+		State: State{
+			State: StateReady,
+			URL:   "noopProxyURL",
+		},
+		Hypervisor:       MockHypervisor,
+		HypervisorConfig: hypervisorConfig,
+		Agent:            NoopAgentType,
+		Annotations:      podAnnotations,
+		ContainersStatus: []ContainerStatus{
+			{
+				ID: containerID,
+				State: State{
+					State: StateReady,
+					URL:   "",
+				},
+				PID:         1000,
+				RootFs:      filepath.Join(testDir, testBundle),
+				Annotations: containerAnnotations,
+			},
+		},
+	}
 
 	p, err := CreatePod(config)
 	if p == nil || err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = StatusPod(p.id)
+	status, err := StatusPod(p.ID())
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	// Copy the start time as we can't pretend we know what that
+	// value will be.
+	expectedStatus.ContainersStatus[0].StartTime = status.ContainersStatus[0].StartTime
+
+	if reflect.DeepEqual(status, expectedStatus) == false {
+		t.Fatalf("Got pod status %v\n expecting %v", status, expectedStatus)
+	}
+}
+
+func TestStatusPodSuccessfulStateRunning(t *testing.T) {
+	cleanUp()
+
+	config := newTestPodConfigNoop()
+	hypervisorConfig := HypervisorConfig{
+		KernelPath:     filepath.Join(testDir, testKernel),
+		ImagePath:      filepath.Join(testDir, testImage),
+		HypervisorPath: filepath.Join(testDir, testHypervisor),
+	}
+
+	expectedStatus := PodStatus{
+		ID: testPodID,
+		State: State{
+			State: StateRunning,
+			URL:   "noopProxyURL",
+		},
+		Hypervisor:       MockHypervisor,
+		HypervisorConfig: hypervisorConfig,
+		Agent:            NoopAgentType,
+		Annotations:      podAnnotations,
+		ContainersStatus: []ContainerStatus{
+			{
+				ID: containerID,
+				State: State{
+					State: StateStopped,
+					URL:   "",
+				},
+				PID:         1000,
+				RootFs:      filepath.Join(testDir, testBundle),
+				Annotations: containerAnnotations,
+			},
+		},
+	}
+
+	p, err := CreatePod(config)
+	if p == nil || err != nil {
+		t.Fatal(err)
+	}
+
+	p, err = StartPod(p.ID())
+	if p == nil || err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := StatusPod(p.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Copy the start time as we can't pretend we know what that
+	// value will be.
+	expectedStatus.ContainersStatus[0].StartTime = status.ContainersStatus[0].StartTime
+
+	if reflect.DeepEqual(status, expectedStatus) == false {
+		t.Fatalf("Got pod status %v\n expecting %v", status, expectedStatus)
 	}
 }
 
@@ -563,10 +746,10 @@ func TestStatusPodFailingFetchPodConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	path := filepath.Join(configStoragePath, p.id)
+	path := filepath.Join(configStoragePath, p.ID())
 	os.RemoveAll(path)
 
-	_, err = StatusPod(p.id)
+	_, err = StatusPod(p.ID())
 	if err == nil {
 		t.Fatal()
 	}
@@ -582,9 +765,12 @@ func TestStatusPodPodFailingFetchPodState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	os.RemoveAll(p.configPath)
+	pImpl, ok := p.(*Pod)
+	assert.True(t, ok)
 
-	_, err = StatusPod(p.id)
+	os.RemoveAll(pImpl.configPath)
+
+	_, err = StatusPod(p.ID())
 	if err == nil {
 		t.Fatal()
 	}
@@ -593,9 +779,10 @@ func TestStatusPodPodFailingFetchPodState(t *testing.T) {
 func newTestContainerConfigNoop(contID string) ContainerConfig {
 	// Define the container command and bundle.
 	container := ContainerConfig{
-		ID:     contID,
-		RootFs: filepath.Join(testDir, testBundle),
-		Cmd:    newBasicTestCmd(),
+		ID:          contID,
+		RootFs:      filepath.Join(testDir, testBundle),
+		Cmd:         newBasicTestCmd(),
+		Annotations: containerAnnotations,
 	}
 
 	return container
@@ -612,7 +799,7 @@ func TestCreateContainerSuccessful(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	podDir := filepath.Join(configStoragePath, p.id)
+	podDir := filepath.Join(configStoragePath, p.ID())
 	_, err = os.Stat(podDir)
 	if err != nil {
 		t.Fatal(err)
@@ -620,7 +807,7 @@ func TestCreateContainerSuccessful(t *testing.T) {
 
 	contConfig := newTestContainerConfigNoop(contID)
 
-	_, c, err := CreateContainer(p.id, contConfig)
+	_, c, err := CreateContainer(p.ID(), contConfig)
 	if c == nil || err != nil {
 		t.Fatal(err)
 	}
@@ -643,12 +830,12 @@ func TestCreateContainerFailingNoPod(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p, err = DeletePod(p.id)
+	p, err = DeletePod(p.ID())
 	if p == nil || err != nil {
 		t.Fatal(err)
 	}
 
-	podDir := filepath.Join(configStoragePath, p.id)
+	podDir := filepath.Join(configStoragePath, p.ID())
 	_, err = os.Stat(podDir)
 	if err == nil {
 		t.Fatal()
@@ -656,7 +843,7 @@ func TestCreateContainerFailingNoPod(t *testing.T) {
 
 	contConfig := newTestContainerConfigNoop(contID)
 
-	_, c, err := CreateContainer(p.id, contConfig)
+	_, c, err := CreateContainer(p.ID(), contConfig)
 	if c != nil || err == nil {
 		t.Fatal(err)
 	}
@@ -673,7 +860,7 @@ func TestDeleteContainerSuccessful(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	podDir := filepath.Join(configStoragePath, p.id)
+	podDir := filepath.Join(configStoragePath, p.ID())
 	_, err = os.Stat(podDir)
 	if err != nil {
 		t.Fatal(err)
@@ -681,7 +868,7 @@ func TestDeleteContainerSuccessful(t *testing.T) {
 
 	contConfig := newTestContainerConfigNoop(contID)
 
-	_, c, err := CreateContainer(p.id, contConfig)
+	_, c, err := CreateContainer(p.ID(), contConfig)
 	if c == nil || err != nil {
 		t.Fatal(err)
 	}
@@ -692,7 +879,7 @@ func TestDeleteContainerSuccessful(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c, err = DeleteContainer(p.id, contID)
+	c, err = DeleteContainer(p.ID(), contID)
 	if c == nil || err != nil {
 		t.Fatal(err)
 	}
@@ -727,13 +914,13 @@ func TestDeleteContainerFailingNoContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	podDir := filepath.Join(configStoragePath, p.id)
+	podDir := filepath.Join(configStoragePath, p.ID())
 	_, err = os.Stat(podDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	c, err := DeleteContainer(p.id, contID)
+	c, err := DeleteContainer(p.ID(), contID)
 	if c != nil || err == nil {
 		t.Fatal()
 	}
@@ -751,7 +938,7 @@ func TestStartContainerNoopAgentSuccessful(t *testing.T) {
 	}
 	contConfig := newTestContainerConfigNoop(contID)
 
-	_, c, err := CreateContainer(p.id, contConfig)
+	_, c, err := CreateContainer(p.ID(), contConfig)
 	if c == nil || err != nil {
 		t.Fatal(err)
 	}
@@ -762,7 +949,7 @@ func TestStartContainerNoopAgentSuccessful(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c, err = StartContainer(p.id, contID)
+	c, err = StartContainer(p.ID(), contID)
 	if c == nil || err != nil {
 		t.Fatal(err)
 	}
@@ -792,13 +979,13 @@ func TestStartContainerFailingNoContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	podDir := filepath.Join(configStoragePath, p.id)
+	podDir := filepath.Join(configStoragePath, p.ID())
 	_, err = os.Stat(podDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	c, err := StartContainer(p.id, contID)
+	c, err := StartContainer(p.ID(), contID)
 	if c != nil || err == nil {
 		t.Fatal()
 	}
@@ -815,7 +1002,7 @@ func TestStartContainerFailingPodNotStarted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	podDir := filepath.Join(configStoragePath, p.id)
+	podDir := filepath.Join(configStoragePath, p.ID())
 	_, err = os.Stat(podDir)
 	if err != nil {
 		t.Fatal(err)
@@ -823,7 +1010,7 @@ func TestStartContainerFailingPodNotStarted(t *testing.T) {
 
 	contConfig := newTestContainerConfigNoop(contID)
 
-	_, c, err := CreateContainer(p.id, contConfig)
+	_, c, err := CreateContainer(p.ID(), contConfig)
 	if c == nil || err != nil {
 		t.Fatal(err)
 	}
@@ -834,9 +1021,9 @@ func TestStartContainerFailingPodNotStarted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c, err = StartContainer(p.id, contID)
-	if c != nil || err == nil {
-		t.Fatal()
+	_, err = StartContainer(p.ID(), contID)
+	if err == nil {
+		t.Fatal("Function should have failed")
 	}
 }
 
@@ -853,7 +1040,7 @@ func TestStopContainerNoopAgentSuccessful(t *testing.T) {
 
 	contConfig := newTestContainerConfigNoop(contID)
 
-	_, c, err := CreateContainer(p.id, contConfig)
+	_, c, err := CreateContainer(p.ID(), contConfig)
 	if c == nil || err != nil {
 		t.Fatal(err)
 	}
@@ -864,12 +1051,12 @@ func TestStopContainerNoopAgentSuccessful(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c, err = StartContainer(p.id, contID)
+	c, err = StartContainer(p.ID(), contID)
 	if c == nil || err != nil {
 		t.Fatal(err)
 	}
 
-	c, err = StopContainer(p.id, contID)
+	c, err = StopContainer(p.ID(), contID)
 	if c == nil || err != nil {
 		t.Fatal(err)
 	}
@@ -902,7 +1089,7 @@ func TestStartStopContainerHyperstartAgentSuccessful(t *testing.T) {
 
 	contConfig := newTestContainerConfigNoop(contID)
 
-	_, c, err := CreateContainer(p.id, contConfig)
+	_, c, err := CreateContainer(p.ID(), contConfig)
 	if c == nil || err != nil {
 		t.Fatal(err)
 	}
@@ -913,17 +1100,20 @@ func TestStartStopContainerHyperstartAgentSuccessful(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c, err = StartContainer(p.id, contID)
+	c, err = StartContainer(p.ID(), contID)
 	if c == nil || err != nil {
 		t.Fatal(err)
 	}
 
-	c, err = StopContainer(p.id, contID)
+	c, err = StopContainer(p.ID(), contID)
 	if c == nil || err != nil {
 		t.Fatal(err)
 	}
 
-	p.agent.(*hyper).bindUnmountAllRootfs(*p)
+	pImpl, ok := p.(*Pod)
+	assert.True(t, ok)
+
+	pImpl.agent.(*hyper).bindUnmountAllRootfs(*pImpl)
 
 	err = os.Remove(pauseBinPath)
 	if err != nil {
@@ -955,12 +1145,12 @@ func TestStartStopPodHyperstartAgentSuccessfulWithCNINetwork(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p, err = StopPod(p.id)
+	p, err = StopPod(p.ID())
 	if p == nil || err != nil {
 		t.Fatal(err)
 	}
 
-	p, err = DeletePod(p.id)
+	p, err = DeletePod(p.ID())
 	if p == nil || err != nil {
 		t.Fatal(err)
 	}
@@ -993,13 +1183,13 @@ func TestStartStopPodHyperstartAgentSuccessfulWithCNMNetwork(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p, err = StopPod(p.id)
-	if p == nil || err != nil {
+	v, err := StopPod(p.ID())
+	if v == nil || err != nil {
 		t.Fatal(err)
 	}
 
-	p, err = DeletePod(p.id)
-	if p == nil || err != nil {
+	v, err = DeletePod(p.ID())
+	if v == nil || err != nil {
 		t.Fatal(err)
 	}
 
@@ -1033,19 +1223,19 @@ func TestStopContainerFailingNoContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	podDir := filepath.Join(configStoragePath, p.id)
+	podDir := filepath.Join(configStoragePath, p.ID())
 	_, err = os.Stat(podDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	c, err := StopContainer(p.id, contID)
+	c, err := StopContainer(p.ID(), contID)
 	if c != nil || err == nil {
 		t.Fatal()
 	}
 }
 
-func TestStopContainerFailingContNotStarted(t *testing.T) {
+func testKillContainerFromContReadySuccessful(t *testing.T, signal syscall.Signal) {
 	cleanUp()
 
 	contID := "100"
@@ -1058,7 +1248,7 @@ func TestStopContainerFailingContNotStarted(t *testing.T) {
 
 	contConfig := newTestContainerConfigNoop(contID)
 
-	_, c, err := CreateContainer(p.id, contConfig)
+	_, c, err := CreateContainer(p.ID(), contConfig)
 	if c == nil || err != nil {
 		t.Fatal(err)
 	}
@@ -1069,10 +1259,20 @@ func TestStopContainerFailingContNotStarted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c, err = StopContainer(p.id, contID)
-	if c != nil || err == nil {
+	if err := KillContainer(p.ID(), contID, signal, false); err != nil {
 		t.Fatal()
 	}
+}
+
+func TestKillContainerFromContReadySuccessful(t *testing.T) {
+	// SIGUSR1
+	testKillContainerFromContReadySuccessful(t, syscall.SIGUSR1)
+	// SIGUSR2
+	testKillContainerFromContReadySuccessful(t, syscall.SIGUSR2)
+	// SIGKILL
+	testKillContainerFromContReadySuccessful(t, syscall.SIGKILL)
+	// SIGTERM
+	testKillContainerFromContReadySuccessful(t, syscall.SIGTERM)
 }
 
 func TestEnterContainerNoopAgentSuccessful(t *testing.T) {
@@ -1088,7 +1288,7 @@ func TestEnterContainerNoopAgentSuccessful(t *testing.T) {
 
 	contConfig := newTestContainerConfigNoop(contID)
 
-	_, c, err := CreateContainer(p.id, contConfig)
+	_, c, err := CreateContainer(p.ID(), contConfig)
 	if c == nil || err != nil {
 		t.Fatal(err)
 	}
@@ -1099,14 +1299,14 @@ func TestEnterContainerNoopAgentSuccessful(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c, err = StartContainer(p.id, contID)
+	c, err = StartContainer(p.ID(), contID)
 	if c == nil || err != nil {
 		t.Fatal(err)
 	}
 
 	cmd := newBasicTestCmd()
 
-	_, c, _, err = EnterContainer(p.id, contID, cmd)
+	_, c, _, err = EnterContainer(p.ID(), contID, cmd)
 	if c == nil || err != nil {
 		t.Fatal(err)
 	}
@@ -1139,7 +1339,7 @@ func TestEnterContainerHyperstartAgentSuccessful(t *testing.T) {
 
 	contConfig := newTestContainerConfigNoop(contID)
 
-	_, _, err = CreateContainer(p.id, contConfig)
+	_, _, err = CreateContainer(p.ID(), contConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1150,24 +1350,27 @@ func TestEnterContainerHyperstartAgentSuccessful(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = StartContainer(p.id, contID)
+	_, err = StartContainer(p.ID(), contID)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	cmd := newBasicTestCmd()
 
-	_, _, _, err = EnterContainer(p.id, contID, cmd)
+	_, _, _, err = EnterContainer(p.ID(), contID, cmd)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = StopContainer(p.id, contID)
+	_, err = StopContainer(p.ID(), contID)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	p.agent.(*hyper).bindUnmountAllRootfs(*p)
+	pImpl, ok := p.(*Pod)
+	assert.True(t, ok)
+
+	pImpl.agent.(*hyper).bindUnmountAllRootfs(*pImpl)
 
 	err = os.Remove(pauseBinPath)
 	if err != nil {
@@ -1201,7 +1404,7 @@ func TestEnterContainerFailingNoContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	podDir := filepath.Join(configStoragePath, p.id)
+	podDir := filepath.Join(configStoragePath, p.ID())
 	_, err = os.Stat(podDir)
 	if err != nil {
 		t.Fatal(err)
@@ -1209,7 +1412,7 @@ func TestEnterContainerFailingNoContainer(t *testing.T) {
 
 	cmd := newBasicTestCmd()
 
-	_, c, _, err := EnterContainer(p.id, contID, cmd)
+	_, c, _, err := EnterContainer(p.ID(), contID, cmd)
 	if c != nil || err == nil {
 		t.Fatal()
 	}
@@ -1228,7 +1431,7 @@ func TestEnterContainerFailingContNotStarted(t *testing.T) {
 
 	contConfig := newTestContainerConfigNoop(contID)
 
-	_, c, err := CreateContainer(p.id, contConfig)
+	_, c, err := CreateContainer(p.ID(), contConfig)
 	if c == nil || err != nil {
 		t.Fatal(err)
 	}
@@ -1241,7 +1444,7 @@ func TestEnterContainerFailingContNotStarted(t *testing.T) {
 
 	cmd := newBasicTestCmd()
 
-	_, c, _, err = EnterContainer(p.id, contID, cmd)
+	_, c, _, err = EnterContainer(p.ID(), contID, cmd)
 	if c != nil || err == nil {
 		t.Fatal()
 	}
@@ -1258,7 +1461,7 @@ func TestStatusContainerSuccessful(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	podDir := filepath.Join(configStoragePath, p.id)
+	podDir := filepath.Join(configStoragePath, p.ID())
 	_, err = os.Stat(podDir)
 	if err != nil {
 		t.Fatal(err)
@@ -1266,7 +1469,7 @@ func TestStatusContainerSuccessful(t *testing.T) {
 
 	contConfig := newTestContainerConfigNoop(contID)
 
-	_, c, err := CreateContainer(p.id, contConfig)
+	_, c, err := CreateContainer(p.ID(), contConfig)
 	if c == nil || err != nil {
 		t.Fatal(err)
 	}
@@ -1277,9 +1480,157 @@ func TestStatusContainerSuccessful(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = StatusContainer(p.id, contID)
+	status, err := StatusContainer(p.ID(), contID)
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	pImpl, ok := p.(*Pod)
+	assert.True(t, ok)
+
+	cImpl, ok := c.(*Container)
+	assert.True(t, ok)
+
+	if status.StartTime.Equal(cImpl.process.StartTime) == false {
+		t.Fatalf("Got container start time %v, expecting %v", status.StartTime, cImpl.process.StartTime)
+	}
+
+	if reflect.DeepEqual(pImpl.config.Containers[0].Annotations, status.Annotations) == false {
+		t.Fatalf("Got annotations %v\n expecting %v", status.Annotations, pImpl.config.Containers[0].Annotations)
+	}
+}
+
+func TestStatusContainerStateReady(t *testing.T) {
+	cleanUp()
+
+	// (homage to a great album! ;)
+	contID := "101"
+	config := newTestPodConfigNoop()
+
+	p, err := CreatePod(config)
+	if p == nil || err != nil {
+		t.Fatal(err)
+	}
+
+	podDir := filepath.Join(configStoragePath, p.ID())
+	_, err = os.Stat(podDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	contConfig := newTestContainerConfigNoop(contID)
+
+	_, c, err := CreateContainer(p.ID(), contConfig)
+	if c == nil || err != nil {
+		t.Fatal(err)
+	}
+
+	contDir := filepath.Join(podDir, contID)
+	_, err = os.Stat(contDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// fresh lookup
+	p2, err := fetchPod(p.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedStatus := ContainerStatus{
+		ID: contID,
+		State: State{
+			State: StateReady,
+			URL:   "",
+		},
+		PID:         1000,
+		RootFs:      filepath.Join(testDir, testBundle),
+		Annotations: containerAnnotations,
+	}
+
+	status, err := statusContainer(p2, contID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Copy the start time as we can't pretend we know what that
+	// value will be.
+	expectedStatus.StartTime = status.StartTime
+
+	if reflect.DeepEqual(status, expectedStatus) == false {
+		t.Fatalf("Got container status %v, expected %v", status, expectedStatus)
+	}
+}
+
+func TestStatusContainerStateRunning(t *testing.T) {
+	cleanUp()
+
+	// (homage to a great album! ;)
+	contID := "101"
+	config := newTestPodConfigNoop()
+
+	p, err := CreatePod(config)
+	if p == nil || err != nil {
+		t.Fatal(err)
+	}
+
+	p, err = StartPod(p.ID())
+	if p == nil || err != nil {
+		t.Fatal(err)
+	}
+
+	podDir := filepath.Join(configStoragePath, p.ID())
+	_, err = os.Stat(podDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	contConfig := newTestContainerConfigNoop(contID)
+
+	_, c, err := CreateContainer(p.ID(), contConfig)
+	if c == nil || err != nil {
+		t.Fatal(err)
+	}
+
+	c, err = StartContainer(p.ID(), c.ID())
+	if c == nil || err != nil {
+		t.Fatal(err)
+	}
+
+	contDir := filepath.Join(podDir, contID)
+	_, err = os.Stat(contDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// fresh lookup
+	p2, err := fetchPod(p.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedStatus := ContainerStatus{
+		ID: contID,
+		State: State{
+			State: StateStopped,
+			URL:   "",
+		},
+		PID:         1000,
+		RootFs:      filepath.Join(testDir, testBundle),
+		Annotations: containerAnnotations,
+	}
+
+	status, err := statusContainer(p2, contID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Copy the start time as we can't pretend we know what that
+	// value will be.
+	expectedStatus.StartTime = status.StartTime
+
+	if reflect.DeepEqual(status, expectedStatus) == false {
+		t.Fatalf("Got container status %v, expected %v", status, expectedStatus)
 	}
 }
 
@@ -1294,9 +1645,12 @@ func TestStatusContainerFailing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	os.RemoveAll(p.configPath)
+	pImpl, ok := p.(*Pod)
+	assert.True(t, ok)
 
-	_, err = StatusContainer(p.id, contID)
+	os.RemoveAll(pImpl.configPath)
+
+	_, err = StatusContainer(p.ID(), contID)
 	if err == nil {
 		t.Fatal()
 	}
@@ -1363,7 +1717,7 @@ func createNewContainerConfigs(numOfContainers int) []ContainerConfig {
 
 // createAndStartPod handles the common test operation of creating and
 // starting a pod.
-func createAndStartPod(config PodConfig) (pod *Pod, podDir string,
+func createAndStartPod(config PodConfig) (pod VCPod, podDir string,
 	err error) {
 
 	// Create pod
@@ -1372,14 +1726,14 @@ func createAndStartPod(config PodConfig) (pod *Pod, podDir string,
 		return nil, "", err
 	}
 
-	podDir = filepath.Join(configStoragePath, pod.id)
+	podDir = filepath.Join(configStoragePath, pod.ID())
 	_, err = os.Stat(podDir)
 	if err != nil {
 		return nil, "", err
 	}
 
 	// Start pod
-	pod, err = StartPod(pod.id)
+	pod, err = StartPod(pod.ID())
 	if pod == nil || err != nil {
 		return nil, "", err
 	}
@@ -1394,13 +1748,13 @@ func createStartStopDeletePod(b *testing.B, podConfig PodConfig) {
 	}
 
 	// Stop pod
-	_, err = StopPod(p.id)
+	_, err = StopPod(p.ID())
 	if err != nil {
 		b.Fatalf("Could not stop pod: %s", err)
 	}
 
 	// Delete pod
-	_, err = DeletePod(p.id)
+	_, err = DeletePod(p.ID())
 	if err != nil {
 		b.Fatalf("Could not delete pod: %s", err)
 	}
@@ -1414,14 +1768,14 @@ func createStartStopDeleteContainers(b *testing.B, podConfig PodConfig, contConf
 	}
 
 	// Start pod
-	_, err = StartPod(p.id)
+	_, err = StartPod(p.ID())
 	if err != nil {
 		b.Fatalf("Could not start pod: %s", err)
 	}
 
 	// Create containers
 	for _, contConfig := range contConfigs {
-		_, _, err := CreateContainer(p.id, contConfig)
+		_, _, err := CreateContainer(p.ID(), contConfig)
 		if err != nil {
 			b.Fatalf("Could not create container %s: %s", contConfig.ID, err)
 		}
@@ -1429,7 +1783,7 @@ func createStartStopDeleteContainers(b *testing.B, podConfig PodConfig, contConf
 
 	// Start containers
 	for _, contConfig := range contConfigs {
-		_, err := StartContainer(p.id, contConfig.ID)
+		_, err := StartContainer(p.ID(), contConfig.ID)
 		if err != nil {
 			b.Fatalf("Could not start container %s: %s", contConfig.ID, err)
 		}
@@ -1437,7 +1791,7 @@ func createStartStopDeleteContainers(b *testing.B, podConfig PodConfig, contConf
 
 	// Stop containers
 	for _, contConfig := range contConfigs {
-		_, err := StopContainer(p.id, contConfig.ID)
+		_, err := StopContainer(p.ID(), contConfig.ID)
 		if err != nil {
 			b.Fatalf("Could not stop container %s: %s", contConfig.ID, err)
 		}
@@ -1445,20 +1799,20 @@ func createStartStopDeleteContainers(b *testing.B, podConfig PodConfig, contConf
 
 	// Delete containers
 	for _, contConfig := range contConfigs {
-		_, err := DeleteContainer(p.id, contConfig.ID)
+		_, err := DeleteContainer(p.ID(), contConfig.ID)
 		if err != nil {
 			b.Fatalf("Could not delete container %s: %s", contConfig.ID, err)
 		}
 	}
 
 	// Stop pod
-	_, err = StopPod(p.id)
+	_, err = StopPod(p.ID())
 	if err != nil {
 		b.Fatalf("Could not stop pod: %s", err)
 	}
 
 	// Delete pod
-	_, err = DeletePod(p.id)
+	_, err = DeletePod(p.ID())
 	if err != nil {
 		b.Fatalf("Could not delete pod: %s", err)
 	}

@@ -17,15 +17,32 @@
 package virtcontainers
 
 import (
+	"fmt"
+	"io"
+	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
+	"time"
+	"unsafe"
+
+	. "github.com/containers/virtcontainers/pkg/mock"
 )
 
-var testShimPath = "/tmp/bin/cc-shim-mock"
+var testShimPath = "/usr/bin/virtcontainers/bin/test/shim"
 var testProxyURL = "foo:///foo/clear-containers/proxy.sock"
 var testWrongConsolePath = "/foo/wrong-console"
 var testConsolePath = "tty-console"
+
+func getMockCCShimBinPath() string {
+	if DefaultMockCCShimBinPath == "" {
+		return testShimPath
+	}
+
+	return DefaultMockCCShimBinPath
+}
 
 func testCCShimStart(t *testing.T, pod Pod, params ShimParams, expectFail bool) {
 	s := &ccShim{}
@@ -72,12 +89,23 @@ func TestCCShimStartShimPathEmptyFailure(t *testing.T) {
 	testCCShimStart(t, pod, ShimParams{}, true)
 }
 
+func TestCCShimStartShimTypeInvalid(t *testing.T) {
+	pod := Pod{
+		config: &PodConfig{
+			ShimType:   "foo",
+			ShimConfig: CCShimConfig{},
+		},
+	}
+
+	testCCShimStart(t, pod, ShimParams{}, true)
+}
+
 func TestCCShimStartParamsTokenEmptyFailure(t *testing.T) {
 	pod := Pod{
 		config: &PodConfig{
 			ShimType: CCShimType,
 			ShimConfig: CCShimConfig{
-				Path: testShimPath,
+				Path: getMockCCShimBinPath(),
 			},
 		},
 	}
@@ -90,7 +118,7 @@ func TestCCShimStartParamsURLEmptyFailure(t *testing.T) {
 		config: &PodConfig{
 			ShimType: CCShimType,
 			ShimConfig: CCShimConfig{
-				Path: testShimPath,
+				Path: getMockCCShimBinPath(),
 			},
 		},
 	}
@@ -102,22 +130,122 @@ func TestCCShimStartParamsURLEmptyFailure(t *testing.T) {
 	testCCShimStart(t, pod, params, true)
 }
 
-func TestCCShimStartSuccessful(t *testing.T) {
+func TestCCShimStartParamsInvalidCommand(t *testing.T) {
+	dir, err := ioutil.TempDir("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	cmd := filepath.Join(dir, "does-not-exist")
+
 	pod := Pod{
 		config: &PodConfig{
 			ShimType: CCShimType,
 			ShimConfig: CCShimConfig{
-				Path: testShimPath,
+				Path: cmd,
 			},
 		},
 	}
 
 	params := ShimParams{
 		Token: "testToken",
-		URL:   testProxyURL,
+		URL:   "http://foo",
 	}
 
+	testCCShimStart(t, pod, params, true)
+}
+
+func startCCShimStartWithoutConsoleSuccessful(t *testing.T, detach bool) (*os.File, *os.File, *os.File, Pod, ShimParams, error) {
+	saveStdout := os.Stdout
+	rStdout, wStdout, err := os.Pipe()
+	if err != nil {
+		return nil, nil, nil, Pod{}, ShimParams{}, err
+	}
+
+	os.Stdout = wStdout
+
+	pod := Pod{
+		config: &PodConfig{
+			ShimType: CCShimType,
+			ShimConfig: CCShimConfig{
+				Path: getMockCCShimBinPath(),
+			},
+		},
+	}
+
+	params := ShimParams{
+		Token:  "testToken",
+		URL:    testProxyURL,
+		Detach: detach,
+	}
+
+	return rStdout, wStdout, saveStdout, pod, params, nil
+}
+
+func TestCCShimStartSuccessful(t *testing.T) {
+	rStdout, wStdout, saveStdout, pod, params, err := startCCShimStartWithoutConsoleSuccessful(t, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() {
+		os.Stdout = saveStdout
+		rStdout.Close()
+		wStdout.Close()
+	}()
+
 	testCCShimStart(t, pod, params, false)
+
+	bufStdout := make([]byte, 1024)
+	if _, err := rStdout.Read(bufStdout); err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(bufStdout), ShimStdoutOutput) {
+		t.Fatalf("Substring %q not found in %q", ShimStdoutOutput, string(bufStdout))
+	}
+}
+
+func TestCCShimStartDetachSuccessful(t *testing.T) {
+	rStdout, wStdout, saveStdout, pod, params, err := startCCShimStartWithoutConsoleSuccessful(t, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() {
+		os.Stdout = saveStdout
+		wStdout.Close()
+		rStdout.Close()
+	}()
+
+	testCCShimStart(t, pod, params, false)
+
+	readCh := make(chan error)
+	go func() {
+		bufStdout := make([]byte, 1024)
+		n, err := rStdout.Read(bufStdout)
+		if err != nil && err != io.EOF {
+			readCh <- err
+			return
+		}
+
+		if n > 0 {
+			readCh <- fmt.Errorf("Not expecting to read anything, Got %q", string(bufStdout))
+			return
+		}
+
+		readCh <- nil
+	}()
+
+	select {
+	case err := <-readCh:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Duration(20) * time.Millisecond):
+		return
+	}
 }
 
 func TestCCShimStartWithConsoleNonExistingFailure(t *testing.T) {
@@ -125,7 +253,7 @@ func TestCCShimStartWithConsoleNonExistingFailure(t *testing.T) {
 		config: &PodConfig{
 			ShimType: CCShimType,
 			ShimConfig: CCShimConfig{
-				Path: testShimPath,
+				Path: getMockCCShimBinPath(),
 			},
 		},
 	}
@@ -139,21 +267,69 @@ func TestCCShimStartWithConsoleNonExistingFailure(t *testing.T) {
 	testCCShimStart(t, pod, params, true)
 }
 
+func ioctl(fd uintptr, flag, data uintptr) error {
+	if _, _, err := syscall.Syscall(syscall.SYS_IOCTL, fd, flag, data); err != 0 {
+		return err
+	}
+
+	return nil
+}
+
+// unlockpt unlocks the slave pseudoterminal device corresponding to the master pseudoterminal referred to by f.
+func unlockpt(f *os.File) error {
+	var u int32
+
+	return ioctl(f.Fd(), syscall.TIOCSPTLCK, uintptr(unsafe.Pointer(&u)))
+}
+
+// ptsname retrieves the name of the first available pts for the given master.
+func ptsname(f *os.File) (string, error) {
+	var n int32
+
+	if err := ioctl(f.Fd(), syscall.TIOCGPTN, uintptr(unsafe.Pointer(&n))); err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("/dev/pts/%d", n), nil
+}
+
+func newConsole() (*os.File, string, error) {
+	master, err := os.OpenFile("/dev/ptmx", syscall.O_RDWR|syscall.O_NOCTTY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, "", err
+	}
+
+	console, err := ptsname(master)
+	if err != nil {
+		return nil, "", err
+	}
+
+	if err := unlockpt(master); err != nil {
+		return nil, "", err
+	}
+
+	if err := os.Chmod(console, 0600); err != nil {
+		return nil, "", err
+	}
+
+	return master, console, nil
+}
+
 func TestCCShimStartWithConsoleSuccessful(t *testing.T) {
 	cleanUp()
 
-	consolePath := filepath.Join(testDir, testConsolePath)
-	f, err := os.Create(consolePath)
+	master, console, err := newConsole()
+	t.Logf("Console created for tests:%s\n", console)
+
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
 
 	pod := Pod{
 		config: &PodConfig{
 			ShimType: CCShimType,
 			ShimConfig: CCShimConfig{
-				Path: testShimPath,
+				Path: getMockCCShimBinPath(),
 			},
 		},
 	}
@@ -161,8 +337,9 @@ func TestCCShimStartWithConsoleSuccessful(t *testing.T) {
 	params := ShimParams{
 		Token:   "testToken",
 		URL:     testProxyURL,
-		Console: consolePath,
+		Console: console,
 	}
 
 	testCCShimStart(t, pod, params, false)
+	master.Close()
 }

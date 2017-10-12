@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"syscall"
 )
 
 type ccShim struct{}
@@ -27,7 +28,8 @@ type ccShim struct{}
 // CCShimConfig is the structure providing specific configuration
 // for ccShim implementation.
 type CCShimConfig struct {
-	Path string
+	Path  string
+	Debug bool
 }
 
 var consoleFileMode = os.FileMode(0660)
@@ -57,12 +59,19 @@ func (s *ccShim) start(pod Pod, params ShimParams) (int, error) {
 		return -1, fmt.Errorf("URL cannot be empty")
 	}
 
-	cmd := exec.Command(config.Path, "-t", params.Token, "-u", params.URL)
+	args := []string{config.Path, "-t", params.Token, "-u", params.URL}
+	if config.Debug {
+		args = append(args, "-d")
+	}
+
+	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Env = os.Environ()
 
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	if !params.Detach {
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 
 	var f *os.File
 	var err error
@@ -75,6 +84,15 @@ func (s *ccShim) start(pod Pod, params ShimParams) (int, error) {
 		cmd.Stdin = f
 		cmd.Stdout = f
 		cmd.Stderr = f
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			// Create Session
+			Setsid: true,
+
+			// Set Controlling terminal to Ctty
+			Setctty: true,
+			Ctty:    int(f.Fd()),
+		}
+
 	}
 	defer func() {
 		if f != nil {

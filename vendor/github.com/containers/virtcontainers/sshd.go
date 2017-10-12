@@ -105,6 +105,15 @@ func (s *sshd) init(pod *Pod, config interface{}) error {
 	return nil
 }
 
+// createPod is the agent pod creation implementation for sshd.
+func (s *sshd) createPod(pod *Pod) error {
+	return nil
+}
+
+func (s *sshd) capabilities() capabilities {
+	return capabilities{}
+}
+
 // exec is the agent command execution implementation for sshd.
 func (s *sshd) exec(pod *Pod, c Container, process Process, cmd Cmd) error {
 	if pod == nil {
@@ -191,6 +200,6 @@ func (s *sshd) stopContainer(pod Pod, c Container) error {
 }
 
 // killContainer is the agent Container signaling implementation for sshd.
-func (s *sshd) killContainer(pod Pod, c Container, signal syscall.Signal) error {
+func (s *sshd) killContainer(pod Pod, c Container, signal syscall.Signal, all bool) error {
 	return nil
 }

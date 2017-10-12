@@ -17,8 +17,14 @@
 package virtcontainers
 
 import (
+	"os/exec"
 	"reflect"
+	"syscall"
 	"testing"
+)
+
+var (
+	testRunningProcess = "sleep"
 )
 
 func testSetShimType(t *testing.T, value string, expected ShimType) {
@@ -146,4 +152,112 @@ func TestNewShimConfigFromUnknownShimPodConfig(t *testing.T) {
 	}
 
 	testNewShimConfigFromPodConfig(t, podConfig, nil)
+}
+
+func testRunSleep0AndGetPid(t *testing.T) int {
+	binPath, err := exec.LookPath(testRunningProcess)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(binPath, "0")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	pid := cmd.Process.Pid
+
+	if err := cmd.Wait(); err != nil {
+		t.Fatal(err)
+	}
+
+	return pid
+}
+
+func testRunSleep999AndGetCmd(t *testing.T) *exec.Cmd {
+	binPath, err := exec.LookPath(testRunningProcess)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(binPath, "999")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	return cmd
+}
+
+func TestStopShimSuccessfulProcessNotRunning(t *testing.T) {
+	pid := testRunSleep0AndGetPid(t)
+
+	if err := stopShim(pid); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStopShimSuccessfulProcessRunning(t *testing.T) {
+	cmd := testRunSleep999AndGetCmd(t)
+
+	if err := stopShim(cmd.Process.Pid); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testIsShimRunning(t *testing.T, pid int, expected bool) {
+	running, err := isShimRunning(pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if running != expected {
+		t.Fatalf("Expecting running=%t, Got running=%t", expected, running)
+	}
+}
+
+func TestIsShimRunningFalse(t *testing.T) {
+	pid := testRunSleep0AndGetPid(t)
+
+	testIsShimRunning(t, pid, false)
+}
+
+func TestIsShimRunningTrue(t *testing.T) {
+	cmd := testRunSleep999AndGetCmd(t)
+
+	testIsShimRunning(t, cmd.Process.Pid, true)
+
+	if err := syscall.Kill(cmd.Process.Pid, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWaitForShimInvalidPidSuccessful(t *testing.T) {
+	wrongValuesList := []int{0, -1, -100}
+
+	for _, val := range wrongValuesList {
+		if err := waitForShim(val); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestWaitForShimNotRunningSuccessful(t *testing.T) {
+	pid := testRunSleep0AndGetPid(t)
+
+	if err := waitForShim(pid); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWaitForShimRunningForTooLongFailure(t *testing.T) {
+	cmd := testRunSleep999AndGetCmd(t)
+
+	waitForShimTimeout = 0.1
+	if err := waitForShim(cmd.Process.Pid); err == nil {
+		t.Fatal(err)
+	}
+
+	if err := syscall.Kill(cmd.Process.Pid, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
 }

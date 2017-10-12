@@ -32,6 +32,8 @@ func newQemuConfig() HypervisorConfig {
 		KernelPath:     testQemuKernelPath,
 		ImagePath:      testQemuImagePath,
 		HypervisorPath: testQemuPath,
+		DefaultVCPUs:   defaultVCPUs,
+		DefaultMemSz:   defaultMemSzMiB,
 	}
 }
 
@@ -55,7 +57,7 @@ func testQemuBuildKernelParams(t *testing.T, kernelParams []Param, expected stri
 	}
 }
 
-var testQemuKernelParamsBase = "root=/dev/pmem0p1 rootflags=dax,data=ordered,errors=remount-ro rw rootfstype=ext4 tsc=reliable no_timer_check rcupdate.rcu_expedited=1 i8042.direct=1 i8042.dumbkbd=1 i8042.nopnp=1 i8042.noaux=1 noreplace-smp reboot=k panic=1 console=hvc0 console=hvc1 initcall_debug init=/usr/lib/systemd/systemd systemd.unit=cc-agent.target iommu=off systemd.mask=systemd-networkd.service systemd.mask=systemd-networkd.socket cryptomgr.notests net.ifnames=0"
+var testQemuKernelParamsBase = "root=/dev/pmem0p1 rootflags=dax,data=ordered,errors=remount-ro rw rootfstype=ext4 tsc=reliable no_timer_check rcupdate.rcu_expedited=1 i8042.direct=1 i8042.dumbkbd=1 i8042.nopnp=1 i8042.noaux=1 noreplace-smp reboot=k panic=1 console=hvc0 console=hvc1 initcall_debug iommu=off cryptomgr.notests net.ifnames=0"
 var testQemuKernelParamsNonDebug = "quiet systemd.show_status=false"
 var testQemuKernelParamsDebug = "debug systemd.show_status=true systemd.log_level=debug"
 
@@ -64,12 +66,12 @@ func TestQemuBuildKernelParamsFoo(t *testing.T) {
 	suffixStr := "foo=foo bar=bar"
 	suffixParams := []Param{
 		{
-			parameter: "foo",
-			value:     "foo",
+			Key:   "foo",
+			Value: "foo",
 		},
 		{
-			parameter: "bar",
-			value:     "bar",
+			Key:   "bar",
+			Value: "bar",
 		},
 	}
 
@@ -96,9 +98,11 @@ func TestQemuBuildKernelParamsFoo(t *testing.T) {
 	}
 }
 
-func testQemuAppend(t *testing.T, structure interface{}, expected []ciaoQemu.Device, devType deviceType) {
+func testQemuAppend(t *testing.T, structure interface{}, expected []ciaoQemu.Device, devType deviceType, nestedVM bool) {
 	var devices []ciaoQemu.Device
-	q := &qemu{}
+	q := &qemu{
+		nestedRun: nestedVM,
+	}
 
 	switch s := structure.(type) {
 	case Volume:
@@ -112,6 +116,10 @@ func testQemuAppend(t *testing.T, structure interface{}, expected []ciaoQemu.Dev
 		case consoleDev:
 			devices = q.appendConsoles(devices, s)
 		}
+	case Drive:
+		devices = q.appendBlockDevice(devices, s)
+	case VFIODevice:
+		devices = q.appendVFIODevice(devices, s)
 	}
 
 	if reflect.DeepEqual(devices, expected) == false {
@@ -122,6 +130,7 @@ func testQemuAppend(t *testing.T, structure interface{}, expected []ciaoQemu.Dev
 func TestQemuAppendVolume(t *testing.T) {
 	mountTag := "testMountTag"
 	hostPath := "testHostPath"
+	nestedVM := true
 
 	expectedOut := []ciaoQemu.Device{
 		ciaoQemu.FSDevice{
@@ -131,6 +140,7 @@ func TestQemuAppendVolume(t *testing.T) {
 			Path:          hostPath,
 			MountTag:      mountTag,
 			SecurityModel: ciaoQemu.None,
+			DisableModern: nestedVM,
 		},
 	}
 
@@ -139,7 +149,7 @@ func TestQemuAppendVolume(t *testing.T) {
 		HostPath: hostPath,
 	}
 
-	testQemuAppend(t, volume, expectedOut, -1)
+	testQemuAppend(t, volume, expectedOut, -1, nestedVM)
 }
 
 func TestQemuAppendSocket(t *testing.T) {
@@ -147,6 +157,7 @@ func TestQemuAppendSocket(t *testing.T) {
 	id := "charchTest"
 	hostPath := "/tmp/hyper_test.sock"
 	name := "sh.hyper.channel.test"
+	nestedVM := true
 
 	expectedOut := []ciaoQemu.Device{
 		ciaoQemu.CharDevice{
@@ -166,7 +177,51 @@ func TestQemuAppendSocket(t *testing.T) {
 		Name:     name,
 	}
 
-	testQemuAppend(t, socket, expectedOut, -1)
+	testQemuAppend(t, socket, expectedOut, -1, nestedVM)
+}
+
+func TestQemuAppendBlockDevice(t *testing.T) {
+	id := "blockDevTest"
+	file := "/root"
+	format := "raw"
+	nestedVM := true
+
+	expectedOut := []ciaoQemu.Device{
+		ciaoQemu.BlockDevice{
+			Driver:        ciaoQemu.VirtioBlock,
+			ID:            id,
+			File:          "/root",
+			AIO:           ciaoQemu.Threads,
+			Format:        ciaoQemu.BlockDeviceFormat(format),
+			Interface:     "none",
+			DisableModern: nestedVM,
+		},
+	}
+
+	drive := Drive{
+		File:   file,
+		Format: format,
+		ID:     id,
+	}
+
+	testQemuAppend(t, drive, expectedOut, -1, nestedVM)
+}
+
+func TestQemuAppendVFIODevice(t *testing.T) {
+	nestedVM := true
+	bdf := "02:10.1"
+
+	expectedOut := []ciaoQemu.Device{
+		ciaoQemu.VFIODevice{
+			BDF: bdf,
+		},
+	}
+
+	vfDevice := VFIODevice{
+		BDF: bdf,
+	}
+
+	testQemuAppend(t, vfDevice, expectedOut, -1, nestedVM)
 }
 
 func TestQemuAppendFSDevices(t *testing.T) {
@@ -175,6 +230,7 @@ func TestQemuAppendFSDevices(t *testing.T) {
 	contRootFs := "testContRootFs"
 	volMountTag := "testVolMountTag"
 	volHostPath := "testVolHostPath"
+	nestedVM := true
 
 	expectedOut := []ciaoQemu.Device{
 		ciaoQemu.FSDevice{
@@ -184,6 +240,7 @@ func TestQemuAppendFSDevices(t *testing.T) {
 			Path:          fmt.Sprintf("%s.1", contRootFs),
 			MountTag:      "ctr-rootfs-0",
 			SecurityModel: ciaoQemu.None,
+			DisableModern: nestedVM,
 		},
 		ciaoQemu.FSDevice{
 			Driver:        ciaoQemu.Virtio9P,
@@ -192,6 +249,7 @@ func TestQemuAppendFSDevices(t *testing.T) {
 			Path:          fmt.Sprintf("%s.2", contRootFs),
 			MountTag:      "ctr-rootfs-1",
 			SecurityModel: ciaoQemu.None,
+			DisableModern: nestedVM,
 		},
 		ciaoQemu.FSDevice{
 			Driver:        ciaoQemu.Virtio9P,
@@ -200,6 +258,7 @@ func TestQemuAppendFSDevices(t *testing.T) {
 			Path:          fmt.Sprintf("%s.1", volHostPath),
 			MountTag:      fmt.Sprintf("%s.1", volMountTag),
 			SecurityModel: ciaoQemu.None,
+			DisableModern: nestedVM,
 		},
 		ciaoQemu.FSDevice{
 			Driver:        ciaoQemu.Virtio9P,
@@ -208,6 +267,7 @@ func TestQemuAppendFSDevices(t *testing.T) {
 			Path:          fmt.Sprintf("%s.2", volHostPath),
 			MountTag:      fmt.Sprintf("%s.2", volMountTag),
 			SecurityModel: ciaoQemu.None,
+			DisableModern: nestedVM,
 		},
 	}
 
@@ -239,16 +299,18 @@ func TestQemuAppendFSDevices(t *testing.T) {
 		Containers: containers,
 	}
 
-	testQemuAppend(t, podConfig, expectedOut, fsDev)
+	testQemuAppend(t, podConfig, expectedOut, fsDev, nestedVM)
 }
 
 func TestQemuAppendConsoles(t *testing.T) {
 	podID := "testPodID"
+	nestedVM := true
 
 	expectedOut := []ciaoQemu.Device{
 		ciaoQemu.SerialDevice{
-			Driver: ciaoQemu.VirtioSerial,
-			ID:     "serial0",
+			Driver:        ciaoQemu.VirtioSerial,
+			ID:            "serial0",
+			DisableModern: nestedVM,
 		},
 		ciaoQemu.CharDevice{
 			Driver:   ciaoQemu.Console,
@@ -264,7 +326,7 @@ func TestQemuAppendConsoles(t *testing.T) {
 		Containers: []ContainerConfig{},
 	}
 
-	testQemuAppend(t, podConfig, expectedOut, consoleDev)
+	testQemuAppend(t, podConfig, expectedOut, consoleDev, nestedVM)
 }
 
 func TestQemuAppendImage(t *testing.T) {
@@ -366,10 +428,16 @@ func TestQemuSetMemoryResources(t *testing.T) {
 
 	q := &qemu{}
 
+	hostMemKb, err := getHostMemorySizeKb(procMemInfo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memMax := fmt.Sprintf("%dM", int(float64(hostMemKb)/1024)+maxMemoryOffset)
+
 	expectedOut := ciaoQemu.Memory{
 		Size:   "1000M",
 		Slots:  uint8(2),
-		MaxMem: "1500M",
+		MaxMem: memMax,
 	}
 
 	vmConfig := Resources{
@@ -380,15 +448,20 @@ func TestQemuSetMemoryResources(t *testing.T) {
 		VMConfig: vmConfig,
 	}
 
-	memory := q.setMemoryResources(podConfig)
+	memory, err := q.setMemoryResources(podConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if reflect.DeepEqual(memory, expectedOut) == false {
 		t.Fatalf("Got %v\nExpecting %v", memory, expectedOut)
 	}
 }
 
-func testQemuAddDevice(t *testing.T, devInfo interface{}, devType deviceType, expected []ciaoQemu.Device) {
-	q := &qemu{}
+func testQemuAddDevice(t *testing.T, devInfo interface{}, devType deviceType, expected []ciaoQemu.Device, nestedVM bool) {
+	q := &qemu{
+		nestedRun: nestedVM,
+	}
 
 	err := q.addDevice(devInfo, devType)
 	if err != nil {
@@ -403,6 +476,7 @@ func testQemuAddDevice(t *testing.T, devInfo interface{}, devType deviceType, ex
 func TestQemuAddDeviceFsDev(t *testing.T) {
 	mountTag := "testMountTag"
 	hostPath := "testHostPath"
+	nestedVM := true
 
 	expectedOut := []ciaoQemu.Device{
 		ciaoQemu.FSDevice{
@@ -412,6 +486,7 @@ func TestQemuAddDeviceFsDev(t *testing.T) {
 			Path:          hostPath,
 			MountTag:      mountTag,
 			SecurityModel: ciaoQemu.None,
+			DisableModern: nestedVM,
 		},
 	}
 
@@ -420,7 +495,7 @@ func TestQemuAddDeviceFsDev(t *testing.T) {
 		HostPath: hostPath,
 	}
 
-	testQemuAddDevice(t, volume, fsDev, expectedOut)
+	testQemuAddDevice(t, volume, fsDev, expectedOut, nestedVM)
 }
 
 func TestQemuAddDeviceSerialPordDev(t *testing.T) {
@@ -428,6 +503,7 @@ func TestQemuAddDeviceSerialPordDev(t *testing.T) {
 	id := "charchTest"
 	hostPath := "/tmp/hyper_test.sock"
 	name := "sh.hyper.channel.test"
+	nestedVM := true
 
 	expectedOut := []ciaoQemu.Device{
 		ciaoQemu.CharDevice{
@@ -447,7 +523,7 @@ func TestQemuAddDeviceSerialPordDev(t *testing.T) {
 		Name:     name,
 	}
 
-	testQemuAddDevice(t, socket, serialPortDev, expectedOut)
+	testQemuAddDevice(t, socket, serialPortDev, expectedOut, nestedVM)
 }
 
 func TestQemuGetPodConsole(t *testing.T) {
@@ -457,5 +533,84 @@ func TestQemuGetPodConsole(t *testing.T) {
 
 	if result := q.getPodConsole(podID); result != expected {
 		t.Fatalf("Got %s\nExpecting %s", result, expected)
+	}
+}
+
+func TestQemuMachineTypes(t *testing.T) {
+	type testData struct {
+		machineType string
+		expectValid bool
+	}
+
+	data := []testData{
+		{"pc-lite", true},
+		{"pc", true},
+		{"q35", true},
+
+		{"PC-LITE", false},
+		{"PC", false},
+		{"Q35", false},
+		{"", false},
+		{" ", false},
+		{".", false},
+		{"0", false},
+		{"1", false},
+		{"-1", false},
+		{"bon", false},
+	}
+
+	q := &qemu{}
+
+	for _, d := range data {
+		m, err := q.getMachine(d.machineType)
+
+		if d.expectValid == true {
+			if err != nil {
+				t.Fatalf("machine type %v unexpectedly invalid: %v", d.machineType, err)
+			}
+
+			if m.Type != d.machineType {
+				t.Fatalf("expected machine type %v, got %v", d.machineType, m.Type)
+			}
+		} else {
+			if err == nil {
+				t.Fatalf("machine type %v unexpectedly valid", d.machineType)
+			}
+		}
+	}
+}
+
+func TestQemuBlockHotplugCapabilities(t *testing.T) {
+	type testData struct {
+		machineType     string
+		expectedSupport bool
+	}
+
+	data := []testData{
+		{"pc-lite", false},
+		{"q35", false},
+		{"pc", true},
+
+		{"PC-LITE", false},
+		{"PC", false},
+		{"Q35", false},
+		{"", false},
+		{" ", false},
+		{".", false},
+		{"0", false},
+		{"1", false},
+		{"-1", false},
+	}
+
+	q := &qemu{}
+
+	for _, d := range data {
+		q.qemuConfig.Machine.Type = d.machineType
+
+		caps := q.capabilities()
+		isSupported := caps.isBlockDeviceHotplugSupported()
+		if isSupported != d.expectedSupport {
+			t.Fatalf("expected blockdevice hotplug support : %v, got %v", d.expectedSupport, isSupported)
+		}
 	}
 }

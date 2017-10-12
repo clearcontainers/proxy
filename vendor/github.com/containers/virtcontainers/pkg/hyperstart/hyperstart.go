@@ -25,7 +25,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 )
 
 // Control command IDs
@@ -129,10 +129,10 @@ type Hyperstart struct {
 	ctlChDone chan interface{}
 }
 
-var hyperLog = logrus.New()
+var hyperLog = logrus.FieldLogger(logrus.New())
 
-// SetLog sets the logger for hyperstart package.
-func SetLog(logger *logrus.Logger) {
+// SetLogger sets the logger for hyperstart package.
+func SetLogger(logger logrus.FieldLogger) {
 	hyperLog = logger
 }
 
@@ -439,7 +439,7 @@ func (h *Hyperstart) CodeFromCmd(cmd string) (uint32, error) {
 func (h *Hyperstart) CheckReturnedCode(recvCode, expectedCode uint32) error {
 	if recvCode != expectedCode {
 		if recvCode == ErrorCode {
-			return fmt.Errorf("ERROR received from Hyperstart")
+			return fmt.Errorf("ERROR received from VM agent")
 		}
 
 		return fmt.Errorf("CMD ID received %d not matching expected %d", recvCode, expectedCode)

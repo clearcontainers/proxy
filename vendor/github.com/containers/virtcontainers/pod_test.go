@@ -17,11 +17,16 @@
 package virtcontainers
 
 import (
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func newHypervisorConfig(kernelParams []Param, hParams []Param) HypervisorConfig {
@@ -122,14 +127,21 @@ func TestPodStateReadyRunning(t *testing.T) {
 }
 
 func TestPodStateRunningPaused(t *testing.T) {
-	err := testPodStateTransition(t, StateRunning, StateStopped)
+	err := testPodStateTransition(t, StateRunning, StatePaused)
 	if err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestPodStatePausedRunning(t *testing.T) {
-	err := testPodStateTransition(t, StateStopped, StateRunning)
+	err := testPodStateTransition(t, StatePaused, StateRunning)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPodStatePausedStopped(t *testing.T) {
+	err := testPodStateTransition(t, StatePaused, StateStopped)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,8 +156,8 @@ func TestPodStateRunningStopped(t *testing.T) {
 
 func TestPodStateReadyPaused(t *testing.T) {
 	err := testPodStateTransition(t, StateReady, StateStopped)
-	if err == nil {
-		t.Fatal("Invalid transition from Ready to Paused")
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -256,6 +268,7 @@ func testStateValid(t *testing.T, stateStr stateString, expected bool) {
 func TestStateValidSuccessful(t *testing.T) {
 	testStateValid(t, StateReady, true)
 	testStateValid(t, StateRunning, true)
+	testStateValid(t, StatePaused, true)
 	testStateValid(t, StateStopped, true)
 }
 
@@ -442,6 +455,181 @@ func TestPodEnterSuccessful(t *testing.T) {
 	pod := &Pod{}
 
 	err := pod.enter([]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testCheckInitPodAndContainerStates(p *Pod, initialPodState State, c *Container, initialContainerState State) error {
+	if p.state.State != initialPodState.State {
+		return fmt.Errorf("Expected pod state %v, got %v", initialPodState.State, p.state.State)
+	}
+
+	if p.state.URL != initialPodState.URL {
+		return fmt.Errorf("Expected pod state URL %v, got %v", initialPodState.URL, p.state.URL)
+	}
+
+	if c.state.State != initialContainerState.State {
+		return fmt.Errorf("Expected container state %v, got %v", initialContainerState.State, c.state.State)
+	}
+
+	if c.state.URL != initialContainerState.URL {
+		return fmt.Errorf("Expected container state URL %v, got %v", initialContainerState.URL, c.state.URL)
+	}
+
+	return nil
+}
+
+func testForcePodStateChangeAndCheck(t *testing.T, p *Pod, newPodState State) error {
+	// force pod state change
+	if err := p.setPodState(newPodState); err != nil {
+		t.Fatalf("Unexpected error: %v (pod %+v)", err, p)
+	}
+
+	// check the in-memory state is correct
+	if p.state.State != newPodState.State {
+		return fmt.Errorf("Expected state %v, got %v", newPodState.State, p.state.State)
+	}
+
+	if p.state.URL != newPodState.URL {
+		return fmt.Errorf("Expected state URL %v, got %v", newPodState.URL, p.state.URL)
+	}
+
+	return nil
+}
+
+func testForceContainerStateChangeAndCheck(t *testing.T, p *Pod, c *Container, newContainerState State) error {
+	// force container state change
+	if err := p.setContainerState(c.id, newContainerState.State); err != nil {
+		t.Fatalf("Unexpected error: %v (pod %+v)", err, p)
+	}
+
+	// check the in-memory state is correct
+	if c.state.State != newContainerState.State {
+		return fmt.Errorf("Expected state %v, got %v", newContainerState.State, c.state.State)
+	}
+
+	if c.state.URL != newContainerState.URL {
+		return fmt.Errorf("Expected state URL %v, got %v", newContainerState.URL, c.state.URL)
+	}
+
+	return nil
+}
+
+func testCheckPodOnDiskState(p *Pod, podState State) error {
+	// check on-disk state is correct
+	if p.state.State != podState.State {
+		return fmt.Errorf("Expected state %v, got %v", podState.State, p.state.State)
+	}
+
+	if p.state.URL != podState.URL {
+		return fmt.Errorf("Expected state URL %v, got %v", podState.URL, p.state.URL)
+	}
+
+	return nil
+}
+
+func testCheckContainerOnDiskState(c *Container, containerState State) error {
+	// check on-disk state is correct
+	if c.state.State != containerState.State {
+		return fmt.Errorf("Expected state %v, got %v", containerState.State, c.state.State)
+	}
+
+	if c.state.URL != containerState.URL {
+		return fmt.Errorf("Expected state URL %v, got %v", containerState.URL, c.state.URL)
+	}
+
+	return nil
+}
+
+func TestPodSetPodAndContainerState(t *testing.T) {
+	contID := "505"
+	contConfig := newTestContainerConfigNoop(contID)
+	hConfig := newHypervisorConfig(nil, nil)
+
+	// create a pod
+	p, err := testCreatePod(t, testPodID, MockHypervisor, hConfig, NoopAgentType, NoopNetworkModel, NetworkConfig{}, []ContainerConfig{contConfig}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	l := len(p.GetAllContainers())
+	if l != 1 {
+		t.Fatalf("Expected 1 container found %v", l)
+	}
+
+	initialPodState := State{
+		State: StateReady,
+		URL:   "",
+	}
+
+	// initially, a container has an empty state
+	initialContainerState := State{
+		State: "",
+		URL:   "",
+	}
+
+	c, err := p.getContainer(contID)
+	if err != nil {
+		t.Fatalf("Failed to retrieve container %v: %v", contID, err)
+	}
+
+	// check initial pod and container states
+	if err := testCheckInitPodAndContainerStates(p, initialPodState, c, initialContainerState); err != nil {
+		t.Error(err)
+	}
+
+	// persist to disk
+	err = p.storePod()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newPodState := State{
+		State: StateRunning,
+		URL:   "http://pod/url",
+	}
+
+	if err := testForcePodStateChangeAndCheck(t, p, newPodState); err != nil {
+		t.Error(err)
+	}
+
+	newContainerState := State{
+		State: StateStopped,
+		URL:   "",
+	}
+
+	if err := testForceContainerStateChangeAndCheck(t, p, c, newContainerState); err != nil {
+		t.Error(err)
+	}
+
+	// force state to be read from disk
+	p2, err := fetchPod(p.ID())
+	if err != nil {
+		t.Fatalf("Failed to fetch pod %v: %v", p.ID(), err)
+	}
+
+	if err := testCheckPodOnDiskState(p2, newPodState); err != nil {
+		t.Error(err)
+	}
+
+	c2, err := p2.getContainer(contID)
+	if err != nil {
+		t.Fatalf("Failed to find container %v: %v", contID, err)
+	}
+
+	if err := testCheckContainerOnDiskState(c2, newContainerState); err != nil {
+		t.Error(err)
+	}
+
+	// revert pod state to allow it to be deleted
+	err = p.setPodState(initialPodState)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v (pod %+v)", err, p)
+	}
+
+	// clean up
+	err = p.delete()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -708,4 +896,396 @@ func TestPodCheckContainersStateFailingEmptyPodID(t *testing.T) {
 	if err == nil {
 		t.Fatal()
 	}
+}
+
+func TestGetContainer(t *testing.T) {
+	containerIDs := []string{"abc", "123", "xyz", "rgb"}
+	containers := []*Container{}
+
+	for _, id := range containerIDs {
+		c := Container{id: id}
+		containers = append(containers, &c)
+	}
+
+	pod := Pod{
+		containers: containers,
+	}
+
+	c := pod.GetContainer("noid")
+	if c != nil {
+		t.Fatal()
+	}
+
+	for _, id := range containerIDs {
+		c = pod.GetContainer(id)
+		if c == nil {
+			t.Fatal()
+		}
+	}
+}
+
+func TestGetAllContainers(t *testing.T) {
+	containerIDs := []string{"abc", "123", "xyz", "rgb"}
+	containers := []*Container{}
+
+	for _, id := range containerIDs {
+		c := Container{id: id}
+		containers = append(containers, &c)
+	}
+
+	pod := Pod{
+		containers: containers,
+	}
+
+	list := pod.GetAllContainers()
+
+	for i, c := range list {
+		if c.ID() != containerIDs[i] {
+			t.Fatal()
+		}
+	}
+}
+
+func TestSetAnnotations(t *testing.T) {
+	pod := Pod{
+		id:              "abcxyz123",
+		storage:         &filesystem{},
+		annotationsLock: &sync.RWMutex{},
+		config: &PodConfig{
+			Annotations: map[string]string{
+				"annotation1": "abc",
+			},
+		},
+	}
+
+	keyAnnotation := "annotation2"
+	valueAnnotation := "xyz"
+	newAnnotations := map[string]string{
+		keyAnnotation: valueAnnotation,
+	}
+
+	// Add a new annotation
+	pod.SetAnnotations(newAnnotations)
+
+	v, err := pod.Annotations(keyAnnotation)
+	if err != nil {
+		t.Fatal()
+	}
+
+	if v != valueAnnotation {
+		t.Fatal()
+	}
+
+	//Change the value of an annotation
+	valueAnnotation = "123"
+	newAnnotations[keyAnnotation] = valueAnnotation
+
+	pod.SetAnnotations(newAnnotations)
+
+	v, err = pod.Annotations(keyAnnotation)
+	if err != nil {
+		t.Fatal()
+	}
+
+	if v != valueAnnotation {
+		t.Fatal()
+	}
+}
+
+func TestPodGetContainer(t *testing.T) {
+
+	emptyPod := Pod{}
+	_, err := emptyPod.getContainer("")
+	if err == nil {
+		t.Fatal("Expected error for containerless pod")
+	}
+
+	_, err = emptyPod.getContainer("foo")
+	if err == nil {
+		t.Fatal("Expected error for containerless pod and invalid containerID")
+	}
+
+	hConfig := newHypervisorConfig(nil, nil)
+	p, err := testCreatePod(t, testPodID, MockHypervisor, hConfig, NoopAgentType, NoopNetworkModel, NetworkConfig{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p.state.URL = noopProxyURL
+
+	contID := "999"
+	contConfig := newTestContainerConfigNoop(contID)
+	_, err = createContainer(p, contConfig)
+	if err != nil {
+		t.Fatalf("Failed to create container %+v in pod %+v: %v", contConfig, p, err)
+	}
+
+	got := false
+	for _, c := range p.GetAllContainers() {
+		c2, err := p.getContainer(c.ID())
+		if err != nil {
+			t.Fatalf("Failed to find container %v: %v", c.ID(), err)
+		}
+
+		if c2.ID() != c.ID() {
+			t.Fatalf("Expected container %v but got %v", c.ID(), c2.ID())
+		}
+
+		if c2.ID() == contID {
+			got = true
+		}
+	}
+
+	if !got {
+		t.Fatalf("Failed to find container %v", contID)
+	}
+}
+
+func TestContainerSetStateBlockIndex(t *testing.T) {
+	containers := []ContainerConfig{
+		{
+			ID: "100",
+		},
+	}
+
+	hConfig := newHypervisorConfig(nil, nil)
+	pod, err := testCreatePod(t, testPodID, MockHypervisor, hConfig, NoopAgentType, NoopNetworkModel, NetworkConfig{}, containers, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fs := &filesystem{}
+	pod.storage = fs
+
+	c := pod.GetContainer("100")
+	if c == nil {
+		t.Fatal()
+	}
+
+	path := filepath.Join(runStoragePath, testPodID, c.ID())
+	err = os.MkdirAll(path, dirMode)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stateFilePath := filepath.Join(path, stateFile)
+
+	os.Remove(stateFilePath)
+
+	f, err := os.Create(stateFilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state := State{
+		State:  "stopped",
+		Fstype: "vfs",
+	}
+
+	cImpl, ok := c.(*Container)
+	assert.True(t, ok)
+
+	cImpl.state = state
+
+	stateData := `{
+		"state":"stopped",
+		"fstype":"vfs"
+	}`
+
+	n, err := f.WriteString(stateData)
+	if err != nil || n != len(stateData) {
+		f.Close()
+		t.Fatal()
+	}
+	f.Close()
+
+	_, err = os.Stat(stateFilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newIndex := 20
+	if err := cImpl.setStateBlockIndex(newIndex); err != nil {
+		t.Fatal(err)
+	}
+
+	if cImpl.state.BlockIndex != newIndex {
+		t.Fatal()
+	}
+
+	fileData, err := ioutil.ReadFile(stateFilePath)
+	if err != nil {
+		t.Fatal()
+	}
+
+	var res State
+	err = json.Unmarshal([]byte(string(fileData)), &res)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if res.BlockIndex != newIndex {
+		t.Fatal()
+	}
+
+	if res.Fstype != state.Fstype {
+		t.Fatal()
+	}
+
+	if res.State != state.State {
+		t.Fatal()
+	}
+}
+
+func TestContainerStateSetFstype(t *testing.T) {
+	var err error
+
+	containers := []ContainerConfig{
+		{
+			ID: "100",
+		},
+	}
+
+	hConfig := newHypervisorConfig(nil, nil)
+	pod, err := testCreatePod(t, testPodID, MockHypervisor, hConfig, NoopAgentType, NoopNetworkModel, NetworkConfig{}, containers, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fs := &filesystem{}
+	pod.storage = fs
+
+	c := pod.GetContainer("100")
+	if c == nil {
+		t.Fatal()
+	}
+
+	path := filepath.Join(runStoragePath, testPodID, c.ID())
+	err = os.MkdirAll(path, dirMode)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stateFilePath := filepath.Join(path, stateFile)
+	os.Remove(stateFilePath)
+
+	f, err := os.Create(stateFilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state := State{
+		State:      "ready",
+		Fstype:     "vfs",
+		BlockIndex: 3,
+	}
+
+	cImpl, ok := c.(*Container)
+	assert.True(t, ok)
+
+	cImpl.state = state
+
+	stateData := `{
+		"state":"ready",
+		"fstype":"vfs",
+		"blockIndex": 3
+	}`
+
+	n, err := f.WriteString(stateData)
+	if err != nil || n != len(stateData) {
+		f.Close()
+		t.Fatal()
+	}
+	f.Close()
+
+	_, err = os.Stat(stateFilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newFstype := "ext4"
+	if err := cImpl.setStateFstype(newFstype); err != nil {
+		t.Fatal(err)
+	}
+
+	if cImpl.state.Fstype != newFstype {
+		t.Fatal()
+	}
+
+	fileData, err := ioutil.ReadFile(stateFilePath)
+	if err != nil {
+		t.Fatal()
+	}
+
+	var res State
+	err = json.Unmarshal([]byte(string(fileData)), &res)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if res.Fstype != newFstype {
+		t.Fatal()
+	}
+
+	if res.BlockIndex != state.BlockIndex {
+		t.Fatal()
+	}
+
+	if res.State != state.State {
+		t.Fatal()
+	}
+}
+
+func TestPodAttachDevicesVFIO(t *testing.T) {
+	tmpDir, err := ioutil.TempDir("", "")
+	assert.Nil(t, err)
+	os.RemoveAll(tmpDir)
+
+	testFDIOGroup := "2"
+	testDeviceBDFPath := "0000:00:1c.0"
+
+	devicesDir := filepath.Join(tmpDir, testFDIOGroup, "devices")
+	err = os.MkdirAll(devicesDir, dirMode)
+	assert.Nil(t, err)
+
+	deviceFile := filepath.Join(devicesDir, testDeviceBDFPath)
+	_, err = os.Create(deviceFile)
+	assert.Nil(t, err)
+
+	savedIOMMUPath := sysIOMMUPath
+	sysIOMMUPath = tmpDir
+
+	defer func() {
+		sysIOMMUPath = savedIOMMUPath
+	}()
+
+	path := filepath.Join(vfioPath, testFDIOGroup)
+	deviceInfo := DeviceInfo{
+		HostPath:      path,
+		ContainerPath: path,
+		DevType:       "c",
+	}
+	vfioDevice := newVFIODevice(deviceInfo)
+
+	c := &Container{
+		id: "100",
+		devices: []Device{
+			vfioDevice,
+		},
+	}
+
+	containers := []*Container{c}
+
+	pod := Pod{
+		containers: containers,
+		hypervisor: &mockHypervisor{},
+	}
+
+	containers[0].pod = &pod
+
+	err = pod.attachDevices()
+	assert.Nil(t, err, "Error while attaching devices %s", err)
+
+	err = pod.detachDevices()
+	assert.Nil(t, err, "Error while detaching devices %s", err)
 }

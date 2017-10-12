@@ -17,15 +17,17 @@
 package virtcontainers
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
 
+	cniTypes "github.com/containernetworking/cni/pkg/types"
 	"github.com/containers/virtcontainers/pkg/hyperstart"
 )
 
-var defaultSockPathTemplates = []string{"/tmp/hyper-pod-%s.sock", "/tmp/tty-pod%s.sock"}
+var defaultSockPathTemplates = []string{"%s/%s/hyper.sock", "%s/%s/tty.sock"}
 var defaultChannelTemplate = "sh.hyper.channel.%d"
 var defaultDeviceIDTemplate = "channel%d"
 var defaultIDTemplate = "charch%d"
@@ -35,6 +37,7 @@ var mountTag = "hyperShared"
 var rootfsDir = "rootfs"
 var pauseBinName = "pause"
 var pauseContainerName = "pause-container"
+var maxHostnameLen = 64
 
 const (
 	unixSocket = "unix"
@@ -55,8 +58,8 @@ func (c *HyperConfig) validate(pod Pod) bool {
 		virtLog.Infof("No sockets from configuration")
 
 		podSocketPaths := []string{
-			fmt.Sprintf(defaultSockPathTemplates[0], pod.id),
-			fmt.Sprintf(defaultSockPathTemplates[1], pod.id),
+			fmt.Sprintf(defaultSockPathTemplates[0], runStoragePath, pod.id),
+			fmt.Sprintf(defaultSockPathTemplates[1], runStoragePath, pod.id),
 		}
 
 		c.SockCtlName = podSocketPaths[0]
@@ -81,7 +84,7 @@ func (c *HyperConfig) validate(pod Pod) bool {
 		c.PauseBinPath = filepath.Join(defaultPauseBinDir, pauseBinName)
 	}
 
-	virtLog.Infof("Hyperstart config %v", c)
+	virtLog.Debugf("Hyperstart config %v", c)
 
 	return true
 }
@@ -111,15 +114,40 @@ func (h *hyper) buildHyperContainerProcess(cmd Cmd) (*hyperstart.Process, error)
 	}
 
 	process := &hyperstart.Process{
-		User:     cmd.User,
-		Group:    cmd.Group,
-		Terminal: cmd.Interactive,
-		Args:     cmd.Args,
-		Envs:     envVars,
-		Workdir:  cmd.WorkDir,
+		Terminal:         cmd.Interactive,
+		Args:             cmd.Args,
+		Envs:             envVars,
+		Workdir:          cmd.WorkDir,
+		User:             cmd.User,
+		Group:            cmd.PrimaryGroup,
+		AdditionalGroups: cmd.SupplementaryGroups,
 	}
 
 	return process, nil
+}
+
+func (h *hyper) processHyperRoute(route *cniTypes.Route, deviceName string) *hyperstart.Route {
+	gateway := route.GW.String()
+	if gateway == "<nil>" {
+		gateway = ""
+	}
+
+	destination := route.Dst.String()
+	if destination == defaultRouteDest {
+		destination = defaultRouteLabel
+	}
+
+	// Skip IPv6 because not supported by hyperstart
+	if destination != defaultRouteDest && route.Dst.IP.To4() == nil {
+		virtLog.Warnf("IPv6 route destination %q not supported", destination)
+		return nil
+	}
+
+	return &hyperstart.Route{
+		Dest:    destination,
+		Gateway: gateway,
+		Device:  deviceName,
+	}
 }
 
 func (h *hyper) buildNetworkInterfacesAndRoutes(pod Pod) ([]hyperstart.NetworkIface, []hyperstart.Route, error) {
@@ -165,37 +193,26 @@ func (h *hyper) buildNetworkInterfacesAndRoutes(pod Pod) ([]hyperstart.NetworkIf
 		iface := hyperstart.NetworkIface{
 			NewDevice:   endpoint.NetPair.VirtIface.Name,
 			IPAddresses: ipAddrs,
-			MTU:         fmt.Sprintf("%d", netIface.MTU),
-			MACAddr:     endpoint.NetPair.VirtIface.HardAddr,
+			MTU:         netIface.MTU,
+			MACAddr:     endpoint.NetPair.TAPIface.HardAddr,
 		}
 
 		ifaces = append(ifaces, iface)
 
 		for _, r := range endpoint.Properties.Routes {
-			// Skip IPv6 because not supported by hyperstart
-			if r.Dst.IP.To4() == nil {
+			route := h.processHyperRoute(r, endpoint.NetPair.VirtIface.Name)
+			if route == nil {
 				continue
 			}
 
-			gateway := r.GW.String()
-			if gateway == "<nil>" {
-				gateway = ""
-			}
-
-			route := hyperstart.Route{
-				Dest:    r.Dst.String(),
-				Gateway: gateway,
-				Device:  endpoint.NetPair.VirtIface.Name,
-			}
-
-			routes = append(routes, route)
+			routes = append(routes, *route)
 		}
 	}
 
 	return ifaces, routes, nil
 }
 
-func (h *hyper) linkPauseBinary(podID string) error {
+func (h *hyper) copyPauseBinary(podID string) error {
 	pauseDir := filepath.Join(defaultSharedDir, podID, pauseContainerName, rootfsDir)
 
 	if err := os.MkdirAll(pauseDir, dirMode); err != nil {
@@ -204,19 +221,99 @@ func (h *hyper) linkPauseBinary(podID string) error {
 
 	pausePath := filepath.Join(pauseDir, pauseBinName)
 
-	return os.Link(h.config.PauseBinPath, pausePath)
+	return fileCopy(h.config.PauseBinPath, pausePath)
 }
 
-func (h *hyper) unlinkPauseBinary(podID string) error {
+func (h *hyper) removePauseBinary(podID string) error {
 	pauseDir := filepath.Join(defaultSharedDir, podID, pauseContainerName)
 
 	return os.RemoveAll(pauseDir)
 }
 
-func (h *hyper) bindMountContainerRootfs(podID, cID, cRootFs string) error {
+func (h *hyper) bindMountContainerRootfs(podID, cID, cRootFs string, readonly bool) error {
 	rootfsDest := filepath.Join(defaultSharedDir, podID, cID, rootfsDir)
 
-	return bindMount(cRootFs, rootfsDest)
+	return bindMount(cRootFs, rootfsDest, readonly)
+}
+
+// bindMountContainerMounts handles bind-mounts by bindmounting to the host shared directory
+// which is mounted through 9pfs in the VM.
+// Hyperstart uses "fsmap" struct to bind mount these mounts in the hypertstart shared directory
+// to the correct mountpoint within the container rootfs.
+func (h *hyper) bindMountContainerMounts(podID string, cID string, mounts []Mount) ([]*hyperstart.FsmapDescriptor, error) {
+	if mounts == nil {
+		return nil, nil
+	}
+
+	var fsmap []*hyperstart.FsmapDescriptor
+
+	// TODO: We need to handle system mounts by having the agent create them inside the VM.
+	// Handle just bind mounts for now
+
+	for ind := range mounts {
+		m := &(mounts[ind])
+
+		if isSystemMount(m.Destination) {
+			continue
+		}
+
+		if m.Type != "bind" {
+			continue
+		}
+
+		randBytes, err := generateRandomBytes(8)
+		if err != nil {
+			return nil, err
+		}
+
+		// These mounts are created in the hyperstart shared dir
+		filename := fmt.Sprintf("%s-%s-%s", cID, hex.EncodeToString(randBytes), filepath.Base(m.Destination))
+		mountDest := filepath.Join(defaultSharedDir, podID, filename)
+
+		err = bindMount(m.Source, mountDest, false)
+		if err != nil {
+			return nil, err
+		}
+
+		m.HostPath = mountDest
+
+		// Check if mount is readonly, let hyperstart handle the readonly mount within the VM
+		readonly := false
+		for _, flag := range m.Options {
+			if flag == "ro" {
+				readonly = true
+			}
+		}
+
+		fsmapDesc := &hyperstart.FsmapDescriptor{
+			Source:       filename,
+			Path:         m.Destination,
+			ReadOnly:     readonly,
+			DockerVolume: false,
+		}
+
+		fsmap = append(fsmap, fsmapDesc)
+	}
+
+	return fsmap, nil
+}
+
+func (h *hyper) bindUnmountContainerMounts(mounts []Mount) error {
+	if mounts == nil {
+		return nil
+	}
+
+	for _, m := range mounts {
+		if !isSystemMount(m.Destination) && m.Type == "bind" {
+			err := syscall.Unmount(m.HostPath, 0)
+
+			if err != nil {
+				virtLog.Warnf("Could not umount :%s", m.HostPath)
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (h *hyper) bindUnmountContainerRootfs(podID, cID string) error {
@@ -228,7 +325,12 @@ func (h *hyper) bindUnmountContainerRootfs(podID, cID string) error {
 
 func (h *hyper) bindUnmountAllRootfs(pod Pod) {
 	for _, c := range pod.containers {
-		h.bindUnmountContainerRootfs(pod.id, c.id)
+		h.bindUnmountContainerMounts(c.mounts)
+		if c.state.Fstype == "" {
+			// Need to check for error returned by this call.
+			// See: https://github.com/containers/virtcontainers/issues/295
+			h.bindUnmountContainerRootfs(pod.id, c.id)
+		}
 	}
 }
 
@@ -247,6 +349,12 @@ func (h *hyper) init(pod *Pod, config interface{}) (err error) {
 	// Override pod agent configuration
 	pod.config.AgentConfig = h.config
 
+	h.proxy = pod.proxy
+
+	return nil
+}
+
+func (h *hyper) createPod(pod *Pod) (err error) {
 	for _, volume := range h.config.Volumes {
 		err := pod.hypervisor.addDevice(volume, fsDev)
 		if err != nil {
@@ -276,9 +384,16 @@ func (h *hyper) init(pod *Pod, config interface{}) (err error) {
 		return err
 	}
 
-	h.proxy = pod.proxy
-
 	return nil
+}
+
+func (h *hyper) capabilities() capabilities {
+	var caps capabilities
+
+	// add all capabilities supported by agent
+	caps.setBlockDeviceSupport()
+
+	return caps
 }
 
 // exec is the agent command execution implementation for hyperstart.
@@ -313,8 +428,13 @@ func (h *hyper) startPod(pod Pod) error {
 		return err
 	}
 
+	hostname := pod.config.Hostname
+	if len(hostname) > maxHostnameLen {
+		hostname = hostname[:maxHostnameLen]
+	}
+
 	hyperPod := hyperstart.Pod{
-		Hostname:   pod.id,
+		Hostname:   hostname,
 		Containers: []hyperstart.Container{},
 		Interfaces: ifaces,
 		Routes:     routes,
@@ -334,36 +454,11 @@ func (h *hyper) startPod(pod Pod) error {
 		return err
 	}
 
-	for _, c := range pod.containers {
-		if err := h.startOneContainer(pod, *c); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
 // stopPod is the agent Pod stopping implementation for hyperstart.
 func (h *hyper) stopPod(pod Pod) error {
-	for _, c := range pod.containers {
-		state, err := pod.storage.fetchContainerState(pod.id, c.id)
-		if err != nil {
-			return err
-		}
-
-		if state.State != StateRunning {
-			continue
-		}
-
-		if err := h.killOneContainer(c.id, syscall.SIGTERM); err != nil {
-			return err
-		}
-
-		if err := h.stopOneContainer(pod.id, c.id); err != nil {
-			return err
-		}
-	}
-
 	if err := h.stopPauseContainer(pod.id); err != nil {
 		return err
 	}
@@ -392,7 +487,7 @@ func (h *hyper) startPauseContainer(podID string) error {
 		Process: process,
 	}
 
-	if err := h.linkPauseBinary(podID); err != nil {
+	if err := h.copyPauseBinary(podID); err != nil {
 		return err
 	}
 
@@ -421,10 +516,33 @@ func (h *hyper) startOneContainer(pod Pod, c Container) error {
 		Process: process,
 	}
 
-	if err := h.bindMountContainerRootfs(pod.id, c.id, c.rootFs); err != nil {
+	if c.state.Fstype != "" {
+		driveName, err := getVirtDriveName(c.state.BlockIndex)
+		if err != nil {
+			return err
+		}
+
+		container.Fstype = c.state.Fstype
+		container.Image = driveName
+	} else {
+
+		if err := h.bindMountContainerRootfs(pod.id, c.id, c.rootFs, false); err != nil {
+			h.bindUnmountAllRootfs(pod)
+			return err
+		}
+	}
+
+	//TODO : Enter mount namespace
+
+	// Handle container mounts
+	fsmap, err := h.bindMountContainerMounts(pod.id, c.id, c.mounts)
+	if err != nil {
 		h.bindUnmountAllRootfs(pod)
 		return err
 	}
+
+	// Assign fsmap for hyperstart to mount these at the correct location within the container
+	container.Fsmap = fsmap
 
 	proxyCmd := hyperstartProxyCmd{
 		cmd:     hyperstart.NewContainer,
@@ -450,11 +568,11 @@ func (h *hyper) startContainer(pod Pod, c Container) error {
 }
 
 func (h *hyper) stopPauseContainer(podID string) error {
-	if err := h.killOneContainer(pauseContainerName, syscall.SIGKILL); err != nil {
+	if err := h.killOneContainer(pauseContainerName, syscall.SIGKILL, true); err != nil {
 		return err
 	}
 
-	if err := h.unlinkPauseBinary(podID); err != nil {
+	if err := h.removePauseBinary(podID); err != nil {
 		return err
 	}
 
@@ -463,12 +581,12 @@ func (h *hyper) stopPauseContainer(podID string) error {
 
 // stopContainer is the agent Container stopping implementation for hyperstart.
 func (h *hyper) stopContainer(pod Pod, c Container) error {
-	return h.stopOneContainer(pod.id, c.id)
+	return h.stopOneContainer(pod.id, c)
 }
 
-func (h *hyper) stopOneContainer(podID, cID string) error {
+func (h *hyper) stopOneContainer(podID string, c Container) error {
 	removeCommand := hyperstart.RemoveCommand{
-		Container: cID,
+		Container: c.id,
 	}
 
 	proxyCmd := hyperstartProxyCmd{
@@ -480,22 +598,29 @@ func (h *hyper) stopOneContainer(podID, cID string) error {
 		return err
 	}
 
-	if err := h.bindUnmountContainerRootfs(podID, cID); err != nil {
+	if err := h.bindUnmountContainerMounts(c.mounts); err != nil {
 		return err
+	}
+
+	if c.state.Fstype == "" {
+		if err := h.bindUnmountContainerRootfs(podID, c.id); err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
 // killContainer is the agent process signal implementation for hyperstart.
-func (h *hyper) killContainer(pod Pod, c Container, signal syscall.Signal) error {
-	return h.killOneContainer(c.id, signal)
+func (h *hyper) killContainer(pod Pod, c Container, signal syscall.Signal, all bool) error {
+	return h.killOneContainer(c.id, signal, all)
 }
 
-func (h *hyper) killOneContainer(cID string, signal syscall.Signal) error {
+func (h *hyper) killOneContainer(cID string, signal syscall.Signal, all bool) error {
 	killCmd := hyperstart.KillCommand{
-		Container: cID,
-		Signal:    signal,
+		Container:    cID,
+		Signal:       signal,
+		AllProcesses: all,
 	}
 
 	proxyCmd := hyperstartProxyCmd{

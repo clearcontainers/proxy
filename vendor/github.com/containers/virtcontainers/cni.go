@@ -17,7 +17,6 @@
 package virtcontainers
 
 import (
-	"github.com/containernetworking/cni/pkg/ns"
 	cniPlugin "github.com/containers/virtcontainers/pkg/cni"
 )
 
@@ -61,62 +60,33 @@ func (n *cni) deleteVirtInterfaces(networkNS NetworkNamespace) error {
 }
 
 // init initializes the network, setting a new network namespace for the CNI network.
-func (n *cni) init(config *NetworkConfig) error {
-	if config.NetNSPath == "" {
-		path, err := createNetNS()
-		if err != nil {
-			return err
-		}
-
-		config.NetNSPath = path
-	}
-
-	return nil
+func (n *cni) init(config NetworkConfig) (string, bool, error) {
+	return initNetworkCommon(config)
 }
 
 // run runs a callback in the specified network namespace.
-// run does not switch the current process to the specified network namespace
-// for the CNI network. Indeed, the switch will occur in the add() and remove()
-// functions instead.
 func (n *cni) run(networkNSPath string, cb func() error) error {
-	return doNetNS(networkNSPath, func(_ ns.NetNS) error {
-		return cb()
-	})
+	return runNetworkCommon(networkNSPath, cb)
 }
 
 // add adds all needed interfaces inside the network namespace for the CNI network.
-func (n *cni) add(pod Pod, config NetworkConfig) (NetworkNamespace, error) {
+func (n *cni) add(pod Pod, config NetworkConfig, netNsPath string, netNsCreated bool) (NetworkNamespace, error) {
 	endpoints, err := createNetworkEndpoints(config.NumInterfaces)
 	if err != nil {
 		return NetworkNamespace{}, err
 	}
 
 	networkNS := NetworkNamespace{
-		NetNsPath: config.NetNSPath,
-		Endpoints: endpoints,
+		NetNsPath:    netNsPath,
+		NetNsCreated: netNsCreated,
+		Endpoints:    endpoints,
 	}
 
-	err = n.addVirtInterfaces(&networkNS)
-	if err != nil {
+	if err := n.addVirtInterfaces(&networkNS); err != nil {
 		return NetworkNamespace{}, err
 	}
 
-	err = doNetNS(networkNS.NetNsPath, func(_ ns.NetNS) error {
-		for _, endpoint := range networkNS.Endpoints {
-			err = bridgeNetworkPair(endpoint.NetPair)
-			if err != nil {
-				return err
-			}
-		}
-
-		return nil
-	})
-	if err != nil {
-		return NetworkNamespace{}, err
-	}
-
-	err = addNetDevHypervisor(pod, networkNS.Endpoints)
-	if err != nil {
+	if err := addNetworkCommon(pod, &networkNS); err != nil {
 		return NetworkNamespace{}, err
 	}
 
@@ -126,29 +96,13 @@ func (n *cni) add(pod Pod, config NetworkConfig) (NetworkNamespace, error) {
 // remove unbridges and deletes TAP interfaces. It also removes virtual network
 // interfaces and deletes the network namespace for the CNI network.
 func (n *cni) remove(pod Pod, networkNS NetworkNamespace) error {
-	err := doNetNS(networkNS.NetNsPath, func(_ ns.NetNS) error {
-		for _, endpoint := range networkNS.Endpoints {
-			err := unBridgeNetworkPair(endpoint.NetPair)
-			if err != nil {
-				return err
-			}
-		}
-
-		return nil
-	})
-	if err != nil {
+	if err := removeNetworkCommon(networkNS); err != nil {
 		return err
 	}
 
-	err = n.deleteVirtInterfaces(networkNS)
-	if err != nil {
+	if err := n.deleteVirtInterfaces(networkNS); err != nil {
 		return err
 	}
 
-	err = deleteNetNS(networkNS.NetNsPath, true)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return deleteNetNS(networkNS.NetNsPath, true)
 }

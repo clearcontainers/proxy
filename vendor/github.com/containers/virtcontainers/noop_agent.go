@@ -30,6 +30,16 @@ func (n *noopAgent) init(pod *Pod, config interface{}) error {
 	return nil
 }
 
+// createPod is the Noop agent pod creation implementation. It does nothing.
+func (n *noopAgent) createPod(pod *Pod) error {
+	return nil
+}
+
+// capabilities returns empty capabilities, i.e no capabilties are supported.
+func (n *noopAgent) capabilities() capabilities {
+	return capabilities{}
+}
+
 // exec is the Noop agent command execution implementation. It does nothing.
 func (n *noopAgent) exec(pod *Pod, c Container, process Process, cmd Cmd) error {
 	return nil
@@ -61,6 +71,6 @@ func (n *noopAgent) stopContainer(pod Pod, c Container) error {
 }
 
 // killContainer is the Noop agent Container signaling implementation. It does nothing.
-func (n *noopAgent) killContainer(pod Pod, c Container, signal syscall.Signal) error {
+func (n *noopAgent) killContainer(pod Pod, c Container, signal syscall.Signal, all bool) error {
 	return nil
 }

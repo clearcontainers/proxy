@@ -17,10 +17,13 @@
 package virtcontainers
 
 import (
+	"io/ioutil"
 	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
+	. "github.com/containers/virtcontainers/pkg/mock"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -29,7 +32,15 @@ var testKeyHook = "test-key"
 var testContainerIDHook = "test-container-id"
 var testControllerIDHook = "test-controller-id"
 var testProcessIDHook = 12345
-var testBinHookPath = "/tmp/bin/hook"
+var testBinHookPath = "/usr/bin/virtcontainers/bin/test/hook"
+
+func getMockHookBinPath() string {
+	if DefaultMockHookBinPath == "" {
+		return testBinHookPath
+	}
+
+	return DefaultMockHookBinPath
+}
 
 func TestBuildHookState(t *testing.T) {
 	expected := specs.State{
@@ -45,7 +56,7 @@ func TestBuildHookState(t *testing.T) {
 
 func createHook(timeout int) *Hook {
 	return &Hook{
-		Path:    testBinHookPath,
+		Path:    getMockHookBinPath(),
 		Args:    []string{testKeyHook, testContainerIDHook, testControllerIDHook},
 		Env:     os.Environ(),
 		Timeout: timeout,
@@ -54,19 +65,29 @@ func createHook(timeout int) *Hook {
 
 func createWrongHook() *Hook {
 	return &Hook{
-		Path: testBinHookPath,
+		Path: getMockHookBinPath(),
 		Args: []string{"wrong-args"},
 		Env:  os.Environ(),
 	}
 }
 
-func testRunHook(t *testing.T, timeout int) {
+func testRunHookFull(t *testing.T, timeout int, expectFail bool) {
 	hook := createHook(timeout)
 
 	err := hook.runHook()
-	if err != nil {
-		t.Fatal()
+	if expectFail {
+		if err == nil {
+			t.Fatal("unexpected success")
+		}
+	} else {
+		if err != nil {
+			t.Fatalf("unexpected failure: %v", err)
+		}
 	}
+}
+
+func testRunHook(t *testing.T, timeout int) {
+	testRunHookFull(t, timeout, false)
 }
 
 func TestRunHook(t *testing.T) {
@@ -97,6 +118,47 @@ func TestRunHookTimeoutFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal()
 	}
+}
+
+func TestRunHookWaitFailure(t *testing.T) {
+	hook := createHook(60)
+
+	hook.Args = append(hook.Args, "1", "panic")
+
+	err := hook.runHook()
+	if err == nil {
+		t.Fatal()
+	}
+}
+
+func testRunHookInvalidCommand(t *testing.T, timeout int) {
+	cleanUp()
+
+	dir, err := ioutil.TempDir("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer os.RemoveAll(dir)
+
+	cmd := filepath.Join(dir, "does-not-exist")
+
+	savedDefaultMockHookBinPath := DefaultMockHookBinPath
+	DefaultMockHookBinPath = cmd
+
+	defer func() {
+		DefaultMockHookBinPath = savedDefaultMockHookBinPath
+	}()
+
+	testRunHookFull(t, timeout, true)
+}
+
+func TestRunHookInvalidCommand(t *testing.T) {
+	testRunHookInvalidCommand(t, 0)
+}
+
+func TestRunHookTimeoutInvalidCommand(t *testing.T) {
+	testRunHookInvalidCommand(t, 1)
 }
 
 func testHooks(t *testing.T, hook *Hook) {

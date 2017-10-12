@@ -28,10 +28,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Sirupsen/logrus"
 	"github.com/clearcontainers/proxy/api"
-
 	"github.com/containers/virtcontainers/pkg/hyperstart"
+	"github.com/sirupsen/logrus"
 )
 
 // Represents a single qemu/hyperstart instance on the system

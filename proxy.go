@@ -34,8 +34,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Sirupsen/logrus"
 	"github.com/clearcontainers/proxy/api"
+	"github.com/sirupsen/logrus"
 )
 
 // tokenState  tracks if an I/O token has been claimed by a shim.

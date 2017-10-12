@@ -93,9 +93,9 @@ func (rig *vmRig) createBaseProcess() *hyperstart.Process {
 func (rig *vmRig) createHyperCmd(vm *vm, cmdName string, numTokens int, data []byte) *api.Hyper {
 	tokens := make([]string, numTokens)
 	for i := 0; i < numTokens; i++ {
-		token, err := vm.AllocateToken()
+		session, err := vm.AllocateSession()
 		assert.Nil(rig.t, err)
-		tokens[i] = string(token)
+		tokens[i] = string(session.token)
 	}
 
 	return &api.Hyper{

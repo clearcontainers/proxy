@@ -38,23 +38,9 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// tokenState  tracks if an I/O token has been claimed by a shim.
-type tokenState int
-
-const (
-	tokenStateAllocated tokenState = iota
-	tokenStateClaimed
-)
-
 // In linux the max socket path is 108 including null character
 // see http://man7.org/linux/man-pages/man7/unix.7.html
 const socketPathMaxLength = 107
-
-// tokenInfo keeps track of per-token data
-type tokenInfo struct {
-	state tokenState
-	vm    *vm
-}
 
 // proxyLog is the general logger the proxy. More specialized loggers can be
 // found in objects (specialized means with already pre-defined fields). Use
@@ -76,9 +62,6 @@ type proxy struct {
 
 	// vms are hashed by their containerID
 	vms map[string]*vm
-
-	// tokenToVM maps I/O token to their per-token info
-	tokenToVM map[Token]*tokenInfo
 
 	// Output the VM console on stderr
 	enableVMConsole bool
@@ -104,9 +87,8 @@ type client struct {
 
 	log *logrus.Entry
 
-	// token and session are populated once a client has issued a successful
+	// session are populated once a client has issued a successful
 	// Connectshim.
-	token   Token
 	session *ioSession
 
 	conn net.Conn
@@ -146,17 +128,11 @@ func (proxy *proxy) allocateTokens(vm *vm, numIOStreams int) (*api.IOResponse, e
 	tokens := make([]string, 0, numIOStreams)
 
 	for i := 0; i < numIOStreams; i++ {
-		token, err := vm.AllocateToken()
+		session, err := vm.AllocateSession()
 		if err != nil {
 			return nil, err
 		}
-		tokens = append(tokens, string(token))
-		proxy.Lock()
-		proxy.tokenToVM[token] = &tokenInfo{
-			state: tokenStateAllocated,
-			vm:    vm,
-		}
-		proxy.Unlock()
+		tokens = append(tokens, string(session.token))
 	}
 
 	return &api.IOResponse{
@@ -165,34 +141,51 @@ func (proxy *proxy) allocateTokens(vm *vm, numIOStreams int) (*api.IOResponse, e
 	}, nil
 }
 
-func (proxy *proxy) claimToken(token Token) (*tokenInfo, error) {
+func (proxy *proxy) claimToken(token Token) (*ioSession, error) {
 	proxy.Lock()
 	defer proxy.Unlock()
 
-	info := proxy.tokenToVM[token]
-	if info == nil {
+	session, err := proxy.getSesssionByToken(token)
+	if err != nil {
 		return nil, fmt.Errorf("unknown token: %s", token)
 	}
 
-	if info.state == tokenStateClaimed {
-		return nil, fmt.Errorf("token already claimed: %s", token)
+	if session.state == tokenStateClaimed {
+		return nil, fmt.Errorf("token already claimed: %s", session.token)
 	}
 
-	info.state = tokenStateClaimed
+	session.state = tokenStateClaimed
 
-	return info, nil
+	return session, nil
 }
 
-func (proxy *proxy) releaseToken(token Token) (*tokenInfo, error) {
+func (proxy *proxy) getSesssionByToken(token Token) (*ioSession, error) {
+
+	if token == nilToken {
+		return nil, fmt.Errorf("Token is nil")
+	}
+	for _, v := range proxy.vms {
+		if s := v.findSessionByToken(token); s != nil {
+			return s, nil
+		}
+	}
+	return nil, fmt.Errorf("unknown token: %s", token)
+}
+
+func (proxy *proxy) releaseToken(token Token) (*ioSession, error) {
 	proxy.Lock()
 	defer proxy.Unlock()
 
-	info := proxy.tokenToVM[token]
-	if info == nil {
+	if token == nilToken {
+		return nil, fmt.Errorf("token is empty")
+	}
+
+	session, err := proxy.getSesssionByToken(token)
+	if err != nil {
 		return nil, fmt.Errorf("unknown token: %s", token)
 	}
 
-	return info, nil
+	return session, nil
 }
 
 // "RegisterVM"
@@ -329,6 +322,11 @@ func unregisterVM(data []byte, userData interface{}, response *handlerResponse) 
 	delete(proxy.vms, vm.containerID)
 	proxy.Unlock()
 
+	if err := vm.freeSessions(); err != nil {
+		response.SetErrorf("Failed to free Sessions: %s", err)
+		return
+	}
+
 	client.vm = nil
 }
 
@@ -374,20 +372,19 @@ func connectShim(data []byte, userData interface{}, response *handlerResponse) {
 	}
 
 	token := Token(payload.Token)
-	info, err := proxy.claimToken(token)
+	session, err := proxy.claimToken(token)
 	if err != nil {
 		response.SetError(err)
 		return
 	}
 
-	session, err := info.vm.AssociateShim(token, client.id, client.conn)
+	_, err = session.vm.AssociateShim(token, client.id, client.conn)
 	if err != nil {
 		response.SetError(err)
 		return
 	}
 
 	client.kind = clientKindShim
-	client.token = token
 	client.session = session
 
 	client.log.Infof("ConnectShim(token=%s)", payload.Token)
@@ -403,20 +400,19 @@ func disconnectShim(data []byte, userData interface{}, response *handlerResponse
 		return
 	}
 
-	info, err := proxy.releaseToken(client.token)
+	session, err := proxy.releaseToken(client.session.token)
 	if err != nil {
 		response.SetError(err)
 		return
 	}
 
-	err = info.vm.FreeToken(client.token)
+	err = session.vm.FreeToken(client.session.token)
 	if err != nil {
 		response.SetError(err)
 		return
 	}
 
 	client.session = nil
-	client.token = ""
 
 	client.log.Infof("DisconnectShim()")
 }
@@ -574,8 +570,7 @@ func handleLogEntry(frame *api.Frame, userData interface{}) error {
 
 func newProxy() *proxy {
 	return &proxy{
-		vms:       make(map[string]*vm),
-		tokenToVM: make(map[Token]*tokenInfo),
+		vms: make(map[string]*vm),
 	}
 }
 
@@ -678,7 +673,10 @@ func (proxy *proxy) serveNewClient(proto *protocol, newConn net.Conn) {
 	// session alive and hope a shim will reconnect claiming the same token.
 	if newClient.session != nil {
 		proxy.Lock()
-		info := proxy.tokenToVM[newClient.token]
+		info, err := proxy.getSesssionByToken(newClient.session.token)
+		if err != nil {
+			newClient.log.Errorf("error getting session: %v", err)
+		}
 		info.state = tokenStateAllocated
 		proxy.Unlock()
 	}

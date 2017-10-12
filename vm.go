@@ -104,6 +104,8 @@ type ioSession struct {
 	// started. This is used to stop the shim from sending stdin data to a
 	// non-existent process.
 	processStarted chan interface{}
+
+	state tokenState
 }
 
 const (
@@ -599,7 +601,7 @@ func (session *ioSession) SendSignal(signal syscall.Signal) error {
 	return err
 }
 
-func (vm *vm) AllocateToken() (Token, error) {
+func (vm *vm) AllocateSession() (*ioSession, error) {
 	vm.Lock()
 	defer vm.Unlock()
 
@@ -611,7 +613,7 @@ func (vm *vm) AllocateToken() (Token, error) {
 
 	token, err := GenerateToken(32)
 	if err != nil {
-		return nilToken, err
+		return nil, err
 	}
 
 	session := &ioSession{
@@ -621,6 +623,7 @@ func (vm *vm) AllocateToken() (Token, error) {
 		ioBase:         ioBase,
 		shimConnected:  make(chan interface{}),
 		processStarted: make(chan interface{}),
+		state:          tokenStateAllocated,
 	}
 
 	// This mapping is to get the session from the seq number in an
@@ -632,7 +635,18 @@ func (vm *vm) AllocateToken() (Token, error) {
 	// This mapping is to get the session from the I/O token
 	vm.tokenToSession[token] = session
 
-	return token, nil
+	return session, nil
+}
+
+func (vm *vm) freeSessions() error {
+	vm.Lock()
+	defer vm.Unlock()
+	for t := range vm.tokenToSession {
+		if err := vm.freeTokenUnlocked(t); err != nil {
+			return fmt.Errorf("Failed to free session with token %s", t)
+		}
+	}
+	return nil
 }
 
 // AssociateShim associates a shim given by the triplet (token, clientID,

@@ -27,6 +27,14 @@ type Token string
 
 const nilToken = Token("")
 
+// tokenState  tracks if an I/O token has been claimed by a shim.
+type tokenState int
+
+const (
+	tokenStateAllocated tokenState = iota
+	tokenStateClaimed
+)
+
 // generateRandomBytes returns securely generated random bytes.
 //
 // It will return an error if the system's secure random number generator

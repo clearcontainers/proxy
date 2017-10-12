@@ -44,6 +44,7 @@ type tokenState int
 const (
 	tokenStateAllocated tokenState = iota
 	tokenStateClaimed
+	name = "cc-proxy"
 )
 
 // In linux the max socket path is 108 including null character
@@ -59,7 +60,11 @@ type tokenInfo struct {
 // proxyLog is the general logger the proxy. More specialized loggers can be
 // found in objects (specialized means with already pre-defined fields). Use
 // proxyLog for proxy message that shouldn't use a specialized one.
-var proxyLog = logrus.WithField("source", "proxy")
+var proxyLog = logrus.WithFields(logrus.Fields{
+	"source": "proxy",
+	"name":   name,
+	"pid":    os.Getpid(),
+})
 
 // KSM setting
 var proxyKSM *ksm

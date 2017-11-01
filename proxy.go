@@ -66,9 +66,6 @@ var proxyLog = logrus.WithFields(logrus.Fields{
 	"pid":    os.Getpid(),
 })
 
-// KSM setting
-var proxyKSM *ksm
-
 // Main struct holding the proxy state
 type proxy struct {
 	// Protect concurrent accesses from separate client goroutines to this
@@ -254,10 +251,6 @@ func registerVM(data []byte, userData interface{}, response *handlerResponse) {
 	}
 
 	client.vm = vm
-
-	if proxyKSM != nil {
-		proxyKSM.kick()
-	}
 
 	// We start one goroutine per-VM to monitor the qemu process
 	proxy.wg.Add(1)
@@ -720,23 +713,10 @@ func (proxy *proxy) serve() {
 }
 
 func proxyMain() {
-	var err error
-
 	proxy := newProxy()
 	if err := proxy.init(); err != nil {
 		fmt.Fprintln(os.Stderr, "init:", err.Error())
 		os.Exit(1)
-	}
-
-	// Init and tune KSM if available
-	proxyKSM, err = startKSM(defaultKSMRoot, proxyKSMMode)
-	if err != nil {
-		// KSM failure should not be fatal
-		fmt.Fprintln(os.Stderr, "init:", err.Error())
-	} else {
-		defer func() {
-			_ = proxyKSM.restore()
-		}()
 	}
 
 	proxy.serve()
@@ -811,7 +791,6 @@ func (p *profiler) setup() {
 
 // Version is the proxy version. This variable is populated at build time.
 var Version = "unknown"
-var proxyKSMMode ksmMode
 
 func main() {
 	doVersion := flag.Bool("version", false, "display the version")
@@ -826,10 +805,6 @@ func main() {
 		"host the pprof server will be bound to")
 	flag.UintVar(&pprof.port, "pprof-port", 6060,
 		"port the pprof server will be bound to")
-
-	proxyKSMMode = defaultKSMMode
-
-	flag.Var(&proxyKSMMode, "ksm", "KSM settings [off, initial, auto]")
 
 	flag.Parse()
 

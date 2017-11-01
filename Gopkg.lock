@@ -5,7 +5,7 @@
   branch = "master"
   name = "github.com/containers/virtcontainers"
   packages = ["pkg/hyperstart","pkg/hyperstart/mock"]
-  revision = "0abfabe1aa20c67ee7fce0ad92c2b0ea1fb65196"
+  revision = "24d2e47187feab0a90ceea9294042c48a2312aaf"
 
 [[projects]]
   name = "github.com/davecgh/go-spew"

@@ -328,6 +328,9 @@ func unregisterVM(data []byte, userData interface{}, response *handlerResponse) 
 	proxy.Unlock()
 
 	client.vm = nil
+
+	// The proxy has to exit now.
+	os.Exit(0)
 }
 
 // "hyper"

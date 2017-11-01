@@ -590,7 +590,7 @@ var ArgSocketPath = flag.String("socket-path", "", "specify path to socket file"
 // getSocketPath computes the path of the proxy socket. Note that when socket
 // activated, the socket path is specified in the systemd socket file but the
 // same value is set in DefaultSocketPath at link time.
-func getSocketPath() (string, error) {
+func getSocketPath(uri string) (string, error) {
 	// Invoking "go build" without any linker option will not
 	// populate DefaultSocketPath, so fallback to a reasonable
 	// path. People should really use the Makefile though.
@@ -599,6 +599,9 @@ func getSocketPath() (string, error) {
 	}
 
 	socketPath := DefaultSocketPath
+	if uri != "" {
+		socketPath = uri
+	}
 
 	if len(*ArgSocketPath) != 0 {
 		socketPath = *ArgSocketPath
@@ -613,7 +616,7 @@ func getSocketPath() (string, error) {
 	return socketPath, nil
 }
 
-func (proxy *proxy) init() error {
+func (proxy *proxy) init(uri string) error {
 	var l net.Listener
 	var err error
 
@@ -624,7 +627,7 @@ func (proxy *proxy) init() error {
 	proxy.enableVMConsole = logrus.GetLevel() == logrus.DebugLevel
 
 	// Open the proxy socket
-	if proxy.socketPath, err = getSocketPath(); err != nil {
+	if proxy.socketPath, err = getSocketPath(uri); err != nil {
 		return fmt.Errorf("couldn't get a rigth socket path: %v", err)
 	}
 	fds := listenFds()
@@ -712,9 +715,9 @@ func (proxy *proxy) serve() {
 	}
 }
 
-func proxyMain() {
+func proxyMain(uri string) {
 	proxy := newProxy()
-	if err := proxy.init(); err != nil {
+	if err := proxy.init(uri); err != nil {
 		fmt.Fprintln(os.Stderr, "init:", err.Error())
 		os.Exit(1)
 	}
@@ -798,6 +801,7 @@ func main() {
 		"log messages above specified level; one of debug, warn, error, fatal or panic")
 
 	var pprof profiler
+	var uri string
 
 	flag.BoolVar(&pprof.enabled, "pprof", false,
 		"enable pprof ")
@@ -805,6 +809,7 @@ func main() {
 		"host the pprof server will be bound to")
 	flag.UintVar(&pprof.port, "pprof-port", 6060,
 		"port the pprof server will be bound to")
+	flag.StringVar(&uri, "uri", "", "proxy socket")
 
 	flag.Parse()
 
@@ -818,5 +823,5 @@ func main() {
 	}
 
 	pprof.setup()
-	proxyMain()
+	proxyMain(uri)
 }

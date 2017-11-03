@@ -94,6 +94,9 @@ type proxy struct {
 	enableVMConsole bool
 
 	wg sync.WaitGroup
+
+	// shutdown the proxy when true
+	finished bool
 }
 
 type clientKind int
@@ -340,6 +343,16 @@ func unregisterVM(data []byte, userData interface{}, response *handlerResponse) 
 	proxy.Unlock()
 
 	client.vm = nil
+
+	if !podInstance {
+		return
+	}
+
+	// Signal the proxy to exit
+	proxy.finished = true
+	if proxy.listener != nil {
+		_ = proxy.listener.Close()
+	}
 }
 
 // "hyper"
@@ -717,6 +730,10 @@ func (proxy *proxy) serve() {
 	for {
 		conn, err := proxy.listener.Accept()
 		if err != nil {
+			if podInstance && proxy.finished {
+				break
+			}
+
 			msg := fmt.Sprint("couldn't accept connection:", err)
 			if podInstance {
 				proxyLog.Info(msg)

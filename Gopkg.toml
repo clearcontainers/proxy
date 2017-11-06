@@ -22,13 +22,13 @@
 
 
 [[constraint]]
-  branch = "master"
   name = "github.com/containers/virtcontainers"
+  revision = "c3c42b5690ce384a26dcb8ac59e922a20dd0ac7a"
 
 [[constraint]]
-  branch = "master"
   name = "github.com/sirupsen/logrus"
+  revision = "89742aefa4b206dcf400792f3bd35b542998eb3b"
 
 [[constraint]]
-  branch = "master"
   name = "github.com/stretchr/testify"
+  revision = "890a5c3458b43e6104ff5da8dfa139d013d77544"

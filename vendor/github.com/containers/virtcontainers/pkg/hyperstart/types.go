@@ -45,6 +45,7 @@ const (
 	SetupInterfaceCode
 	SetupRouteCode
 	RemoveContainerCode
+	PsContainerCode
 	ProcessAsyncEventCode
 )
 
@@ -74,6 +75,14 @@ type ExecCommand struct {
 // hyperstart to remove a container on the guest.
 type RemoveCommand struct {
 	Container string `json:"container"`
+}
+
+// PsCommand is the structure corresponding to the format expected by
+// hyperstart to list processes of a container on the guest.
+type PsCommand struct {
+	Container string   `json:"container"`
+	Format    string   `json:"format"`
+	PsArgs    []string `json:"psargs"`
 }
 
 // PAECommand is the structure hyperstart can expects to
@@ -123,6 +132,7 @@ type FsmapDescriptor struct {
 	Path         string `json:"path"`
 	ReadOnly     bool   `json:"readOnly"`
 	DockerVolume bool   `json:"dockerVolume"`
+	AbsolutePath bool   `json:"absolutePath"`
 }
 
 // EnvironmentVar holds an environment variable and its value.

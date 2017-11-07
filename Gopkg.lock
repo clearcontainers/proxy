@@ -2,10 +2,9 @@
 
 
 [[projects]]
-  branch = "master"
   name = "github.com/containers/virtcontainers"
   packages = ["pkg/hyperstart","pkg/hyperstart/mock"]
-  revision = "0abfabe1aa20c67ee7fce0ad92c2b0ea1fb65196"
+  revision = "c3c42b5690ce384a26dcb8ac59e922a20dd0ac7a"
 
 [[projects]]
   name = "github.com/davecgh/go-spew"
@@ -20,13 +19,11 @@
   version = "v1.0.0"
 
 [[projects]]
-  branch = "master"
   name = "github.com/sirupsen/logrus"
   packages = [".","hooks/test"]
   revision = "89742aefa4b206dcf400792f3bd35b542998eb3b"
 
 [[projects]]
-  branch = "master"
   name = "github.com/stretchr/testify"
   packages = ["assert"]
   revision = "890a5c3458b43e6104ff5da8dfa139d013d77544"
@@ -46,6 +43,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "e5b68846db2039a28abcc70248322cd7850786ce2a5f34e7a6bd15a9fb71e149"
+  inputs-digest = "f1d5bd3e5b7a9d1bbd32e85fd8442c29375c74b0c94604d0fb105f2b9716f620"
   solver-name = "gps-cdcl"
   solver-version = 1

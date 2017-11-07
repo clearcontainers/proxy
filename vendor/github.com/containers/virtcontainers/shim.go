@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/mitchellh/mapstructure"
+	"github.com/sirupsen/logrus"
 )
 
 // ShimType describes a shim type.
@@ -41,10 +42,11 @@ var waitForShimTimeout = 5.0
 // ShimParams is the structure providing specific parameters needed
 // for the execution of the shim binary.
 type ShimParams struct {
-	Token   string
-	URL     string
-	Console string
-	Detach  bool
+	Container string
+	Token     string
+	URL       string
+	Console   string
+	Detach    bool
 }
 
 // Set sets a shim type based on the input string.
@@ -102,12 +104,16 @@ func newShimConfig(config PodConfig) interface{} {
 	}
 }
 
+func shimLogger() *logrus.Entry {
+	return virtLog.WithField("subsystem", "shim")
+}
+
 func stopShim(pid int) error {
 	if pid <= 0 {
 		return nil
 	}
 
-	virtLog.Infof("Stopping shim PID %d", pid)
+	shimLogger().WithField("shim-pid", pid).Info("Stopping shim")
 
 	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
 		return err

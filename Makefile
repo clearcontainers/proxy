@@ -16,6 +16,7 @@ LOCALSTATEDIR := /var
 
 SOURCES := $(shell find . 2>&1 | grep -E '.*\.(c|h|go)$$')
 PROXY_SOCKET := $(LOCALSTATEDIR)/run/clear-containers/proxy.sock
+STORE_STATE_DIR := $(LOCALSTATEDIR)/run/clear-containers/proxy/
 
 DESCRIBE := $(shell git describe 2> /dev/null || true)
 DESCRIBE_DIRTY := $(if $(shell git status --porcelain --untracked-files=no 2> /dev/null),${DESCRIBE}-dirty,${DESCRIBE})
@@ -53,7 +54,7 @@ all: cc-proxy $(UNIT_FILES)
 
 cc-proxy: $(SOURCES) Makefile
 	$(QUIET_GOBUILD)go build -i -o $@ -ldflags \
-		"-X main.DefaultSocketPath=$(PROXY_SOCKET) -X main.Version=$(VERSION)"
+		"-X main.DefaultSocketPath=$(PROXY_SOCKET) -X main.Version=$(VERSION) -X main.storeStateDir=$(STORE_STATE_DIR)"
 
 #
 # Tests

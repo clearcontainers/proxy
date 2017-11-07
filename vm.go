@@ -284,6 +284,10 @@ func (vm *vm) consoleToLog() {
 }
 
 func (vm *vm) Connect() error {
+	return vm.Reconnect(false)
+}
+
+func (vm *vm) Reconnect(reconnect bool) error {
 	if vm.console.socketPath != "" {
 		var err error
 
@@ -300,7 +304,12 @@ func (vm *vm) Connect() error {
 		return err
 	}
 
-	if err := vm.hyperHandler.WaitForReady(); err != nil {
+	if reconnect {
+		if !vm.hyperHandler.IsStarted() {
+			vm.hyperHandler.CloseSockets()
+			return errors.New("failed to reconnect to the agent")
+		}
+	} else if err := vm.hyperHandler.WaitForReady(); err != nil {
 		vm.hyperHandler.CloseSockets()
 		return err
 	}
@@ -361,6 +370,12 @@ func newcontainerHandler(vm *vm, hyper *api.Hyper, session *ioSession) error {
 	}
 
 	session.containerID = cmdIn.ID
+
+	// update stored ioSessions
+	if err := storeVMState(vm); err != nil {
+		proxyLog.WithField("vm", vm.containerID).Errorf(
+			"couldn't store a VM state: %v", err)
+	}
 
 	if err := relocateProcess(cmdIn.Process, session); err != nil {
 		return err
@@ -617,6 +632,47 @@ func (vm *vm) AllocateToken() (Token, error) {
 	session := &ioSession{
 		vm:             vm,
 		token:          token,
+		nStreams:       nStreams,
+		ioBase:         ioBase,
+		shimConnected:  make(chan interface{}),
+		processStarted: make(chan interface{}),
+	}
+
+	// This mapping is to get the session from the seq number in an
+	// hyperstart I/O paquet.
+	for i := 0; i < nStreams; i++ {
+		vm.ioSessions[ioBase+uint64(i)] = session
+	}
+
+	// This mapping is to get the session from the I/O token
+	vm.tokenToSession[token] = session
+
+	return token, nil
+}
+
+// This function is used to restore tokens and io sessions
+func (vm *vm) AllocateIoSessionAs(token Token, contID string, nStreams int,
+	ioBase uint64) (Token, error) {
+
+	if token == "" || contID == "" || nStreams == 0 {
+		return "", fmt.Errorf("Can't allocate a session: " +
+			"got an invalid parameter")
+	}
+
+	vm.Lock()
+	defer vm.Unlock()
+
+	if ioBase > vm.nextIoBase {
+		return "", fmt.Errorf("Can't allocate a session: " +
+			"inconsisten ioBase parameter")
+	}
+
+	vm.nextIoBase += uint64(nStreams)
+
+	session := &ioSession{
+		vm:             vm,
+		token:          token,
+		containerID:    contID,
 		nStreams:       nStreams,
 		ioBase:         ioBase,
 		shimConnected:  make(chan interface{}),

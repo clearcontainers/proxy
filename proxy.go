@@ -255,6 +255,15 @@ func registerVM(data []byte, userData interface{}, response *handlerResponse) {
 
 	client.vm = vm
 
+	if err := storeVMState(vm); err != nil {
+		logContID(vm.containerID).Errorf(
+			"couldn't store a VM state: %v", err)
+	}
+
+	if err := storeProxyState(proxy); err != nil {
+		proxyLog.Errorf("couldn't store proxy's state: %v", err)
+	}
+
 	if proxyKSM != nil {
 		proxyKSM.kick()
 	}
@@ -300,6 +309,15 @@ func attachVM(data []byte, userData interface{}, response *handlerResponse) {
 	client.log.Infof("AttachVM(containerId=%s)", payload.ContainerID)
 
 	client.vm = vm
+
+	if err := storeVMState(vm); err != nil {
+		logContID(vm.containerID).Errorf(
+			"couldn't store a VM state: %v", err)
+	}
+
+	if err := storeProxyState(proxy); err != nil {
+		proxyLog.Errorf("couldn't store proxy's state: %v", err)
+	}
 }
 
 // "UnregisterVM"
@@ -330,9 +348,10 @@ func unregisterVM(data []byte, userData interface{}, response *handlerResponse) 
 
 	client.log.Info("UnregisterVM()")
 
-	proxy.Lock()
-	delete(proxy.vms, vm.containerID)
-	proxy.Unlock()
+	if err := delVMAndState(proxy, vm); err != nil {
+		logContID(payload.ContainerID).Warnf("Error deleting state: %v",
+			err)
+	}
 
 	client.vm = nil
 }
@@ -627,12 +646,19 @@ func (proxy *proxy) init() error {
 	// Force a coredump + full stacktrace on internal error
 	debug.SetTraceback("crash")
 
-	// flags
-	proxy.enableVMConsole = logrus.GetLevel() == logrus.DebugLevel
+	stateIsRestored, err := restoreAllState(proxy)
+	if err != nil {
+		proxyLog.Errorf("Restoring failed: %v", err)
+	}
 
-	// Open the proxy socket
-	if proxy.socketPath, err = getSocketPath(); err != nil {
-		return fmt.Errorf("couldn't get a rigth socket path: %v", err)
+	if !stateIsRestored {
+		// flags
+		proxy.enableVMConsole = logrus.GetLevel() == logrus.DebugLevel
+
+		// Open the proxy socket
+		if proxy.socketPath, err = getSocketPath(); err != nil {
+			return fmt.Errorf("couldn't get a right socket path: %v", err)
+		}
 	}
 	fds := listenFds()
 

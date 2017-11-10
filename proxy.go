@@ -20,6 +20,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/syslog"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
@@ -36,6 +37,7 @@ import (
 
 	"github.com/clearcontainers/proxy/api"
 	"github.com/sirupsen/logrus"
+	lsyslog "github.com/sirupsen/logrus/hooks/syslog"
 )
 
 // tokenState  tracks if an I/O token has been claimed by a shim.
@@ -715,7 +717,13 @@ func (proxy *proxy) serve() {
 	for {
 		conn, err := proxy.listener.Accept()
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "couldn't accept connection:", err)
+			msg := fmt.Sprint("couldn't accept connection:", err)
+			if podInstance {
+				proxyLog.Info(msg)
+			} else {
+				fmt.Fprintln(os.Stderr, msg)
+			}
+
 			continue
 		}
 
@@ -734,7 +742,12 @@ func proxyMain(uri string) {
 
 	proxy := newProxy()
 	if err := proxy.init(uri); err != nil {
-		fmt.Fprintln(os.Stderr, "init:", err.Error())
+		if podInstance {
+			proxyLog.WithError(err).Error("init failed")
+		} else {
+			fmt.Fprint(os.Stderr, "init failed: ", err.Error())
+		}
+
 		os.Exit(1)
 	}
 
@@ -794,6 +807,19 @@ func SetLoggingParams(logLevel string) error {
 	// enable nanosecond timestamps
 	proxyLog.Logger.Formatter = &logrus.TextFormatter{
 		TimestampFormat: time.RFC3339Nano,
+	}
+
+	// log to syslog
+	if podInstance {
+		syslogHook, err := lsyslog.NewSyslogHook("",
+			"",
+			syslog.LOG_INFO|syslog.LOG_DAEMON,
+			"")
+		if err != nil {
+			return err
+		}
+
+		proxyLog.Logger.Hooks.Add(syslogHook)
 	}
 
 	return nil

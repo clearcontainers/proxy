@@ -632,7 +632,7 @@ func (proxy *proxy) init() error {
 
 	// Open the proxy socket
 	if proxy.socketPath, err = getSocketPath(); err != nil {
-		return fmt.Errorf("couldn't get a rigth socket path: %v", err)
+		return fmt.Errorf("couldn't get a valid socket path: %v", err)
 	}
 	fds := listenFds()
 

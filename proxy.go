@@ -44,7 +44,8 @@ type tokenState int
 const (
 	tokenStateAllocated tokenState = iota
 	tokenStateClaimed
-	name = "cc-proxy"
+	name   = "cc-proxy"
+	scheme = "unix"
 )
 
 // In linux the max socket path is 108 including null character
@@ -76,7 +77,9 @@ type proxy struct {
 	sync.Mutex
 
 	// proxy socket
-	listener   net.Listener
+	listener net.Listener
+
+	// socket path (without the "unix://" protocol prefix)
 	socketPath string
 
 	// vms are hashed by their containerID
@@ -138,7 +141,7 @@ func newClient(proxy *proxy, conn net.Conn) *client {
 
 func (proxy *proxy) allocateTokens(vm *vm, numIOStreams int) (*api.IOResponse, error) {
 	url := url.URL{
-		Scheme: "unix",
+		Scheme: scheme,
 		Path:   proxy.socketPath,
 	}
 
@@ -594,10 +597,8 @@ var legacySocketPath = "/var/run/cc-oci-runtime/proxy.sock"
 // ArgSocketPath is populated at runtime from the option -socket-path
 var ArgSocketPath = flag.String("socket-path", "", "specify path to socket file")
 
-// getSocketPath computes the path of the proxy socket. Note that when socket
-// activated, the socket path is specified in the systemd socket file but the
-// same value is set in DefaultSocketPath at link time.
-func getSocketPath() (string, error) {
+// getSocketPath computes the path of the proxy socket.
+func getSocketPath(uri string) (string, error) {
 	// Invoking "go build" without any linker option will not
 	// populate DefaultSocketPath, so fallback to a reasonable
 	// path. People should really use the Makefile though.
@@ -606,6 +607,9 @@ func getSocketPath() (string, error) {
 	}
 
 	socketPath := DefaultSocketPath
+	if uri != "" {
+		socketPath = strings.TrimPrefix(uri, scheme+"://")
+	}
 
 	if len(*ArgSocketPath) != 0 {
 		socketPath = *ArgSocketPath
@@ -620,7 +624,7 @@ func getSocketPath() (string, error) {
 	return socketPath, nil
 }
 
-func (proxy *proxy) init() error {
+func (proxy *proxy) init(uri string) error {
 	var l net.Listener
 	var err error
 
@@ -631,7 +635,7 @@ func (proxy *proxy) init() error {
 	proxy.enableVMConsole = logrus.GetLevel() == logrus.DebugLevel
 
 	// Open the proxy socket
-	if proxy.socketPath, err = getSocketPath(); err != nil {
+	if proxy.socketPath, err = getSocketPath(uri); err != nil {
 		return fmt.Errorf("couldn't get a valid socket path: %v", err)
 	}
 	fds := listenFds()
@@ -719,11 +723,17 @@ func (proxy *proxy) serve() {
 	}
 }
 
-func proxyMain() {
+func proxyMain(uri string) {
 	var err error
 
+	if podInstance {
+		proxyLog.WithField("mode", "pod").Info("starting")
+	} else {
+		fmt.Fprintln(os.Stderr, "starting in system mode")
+	}
+
 	proxy := newProxy()
-	if err := proxy.init(); err != nil {
+	if err := proxy.init(uri); err != nil {
 		fmt.Fprintln(os.Stderr, "init:", err.Error())
 		os.Exit(1)
 	}
@@ -813,12 +823,16 @@ func (p *profiler) setup() {
 var Version = "unknown"
 var proxyKSMMode ksmMode
 
+// true if associated with a single POD
+var podInstance bool
+
 func main() {
 	doVersion := flag.Bool("version", false, "display the version")
 	logLevel := flag.String("log", "warn",
 		"log messages above specified level; one of debug, warn, error, fatal or panic")
 
 	var pprof profiler
+	var uri string
 
 	flag.BoolVar(&pprof.enabled, "pprof", false,
 		"enable pprof ")
@@ -826,12 +840,17 @@ func main() {
 		"host the pprof server will be bound to")
 	flag.UintVar(&pprof.port, "pprof-port", 6060,
 		"port the pprof server will be bound to")
+	flag.StringVar(&uri, "uri", "", "proxy socket URI")
 
 	proxyKSMMode = defaultKSMMode
 
 	flag.Var(&proxyKSMMode, "ksm", "KSM settings [off, initial, auto]")
 
 	flag.Parse()
+
+	if uri != "" {
+		podInstance = true
+	}
 
 	if err := SetLoggingParams(*logLevel); err != nil {
 		logrus.Fatal(err)
@@ -843,5 +862,5 @@ func main() {
 	}
 
 	pprof.setup()
-	proxyMain()
+	proxyMain(uri)
 }

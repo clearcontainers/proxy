@@ -20,6 +20,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/syslog"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
@@ -36,6 +37,7 @@ import (
 
 	"github.com/clearcontainers/proxy/api"
 	"github.com/sirupsen/logrus"
+	lsyslog "github.com/sirupsen/logrus/hooks/syslog"
 )
 
 // tokenState  tracks if an I/O token has been claimed by a shim.
@@ -44,7 +46,8 @@ type tokenState int
 const (
 	tokenStateAllocated tokenState = iota
 	tokenStateClaimed
-	name = "cc-proxy"
+	name   = "cc-proxy"
+	scheme = "unix"
 )
 
 // In linux the max socket path is 108 including null character
@@ -76,7 +79,9 @@ type proxy struct {
 	sync.Mutex
 
 	// proxy socket
-	listener   net.Listener
+	listener net.Listener
+
+	// socket path (without the "unix://" protocol prefix)
 	socketPath string
 
 	// vms are hashed by their containerID
@@ -89,6 +94,9 @@ type proxy struct {
 	enableVMConsole bool
 
 	wg sync.WaitGroup
+
+	// shutdown the proxy when true
+	finished bool
 }
 
 type clientKind int
@@ -138,7 +146,7 @@ func newClient(proxy *proxy, conn net.Conn) *client {
 
 func (proxy *proxy) allocateTokens(vm *vm, numIOStreams int) (*api.IOResponse, error) {
 	url := url.URL{
-		Scheme: "unix",
+		Scheme: scheme,
 		Path:   proxy.socketPath,
 	}
 
@@ -335,6 +343,16 @@ func unregisterVM(data []byte, userData interface{}, response *handlerResponse) 
 	proxy.Unlock()
 
 	client.vm = nil
+
+	if !podInstance {
+		return
+	}
+
+	// Signal the proxy to exit
+	proxy.finished = true
+	if proxy.listener != nil {
+		_ = proxy.listener.Close()
+	}
 }
 
 // "hyper"
@@ -594,10 +612,8 @@ var legacySocketPath = "/var/run/cc-oci-runtime/proxy.sock"
 // ArgSocketPath is populated at runtime from the option -socket-path
 var ArgSocketPath = flag.String("socket-path", "", "specify path to socket file")
 
-// getSocketPath computes the path of the proxy socket. Note that when socket
-// activated, the socket path is specified in the systemd socket file but the
-// same value is set in DefaultSocketPath at link time.
-func getSocketPath() (string, error) {
+// getSocketPath computes the path of the proxy socket.
+func getSocketPath(uri string) (string, error) {
 	// Invoking "go build" without any linker option will not
 	// populate DefaultSocketPath, so fallback to a reasonable
 	// path. People should really use the Makefile though.
@@ -606,6 +622,9 @@ func getSocketPath() (string, error) {
 	}
 
 	socketPath := DefaultSocketPath
+	if uri != "" {
+		socketPath = strings.TrimPrefix(uri, scheme+"://")
+	}
 
 	if len(*ArgSocketPath) != 0 {
 		socketPath = *ArgSocketPath
@@ -620,7 +639,7 @@ func getSocketPath() (string, error) {
 	return socketPath, nil
 }
 
-func (proxy *proxy) init() error {
+func (proxy *proxy) init(uri string) error {
 	var l net.Listener
 	var err error
 
@@ -631,8 +650,8 @@ func (proxy *proxy) init() error {
 	proxy.enableVMConsole = logrus.GetLevel() == logrus.DebugLevel
 
 	// Open the proxy socket
-	if proxy.socketPath, err = getSocketPath(); err != nil {
-		return fmt.Errorf("couldn't get a rigth socket path: %v", err)
+	if proxy.socketPath, err = getSocketPath(uri); err != nil {
+		return fmt.Errorf("couldn't get a valid socket path: %v", err)
 	}
 	fds := listenFds()
 
@@ -711,7 +730,17 @@ func (proxy *proxy) serve() {
 	for {
 		conn, err := proxy.listener.Accept()
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "couldn't accept connection:", err)
+			if podInstance && proxy.finished {
+				break
+			}
+
+			msg := fmt.Sprint("couldn't accept connection:", err)
+			if podInstance {
+				proxyLog.Info(msg)
+			} else {
+				fmt.Fprintln(os.Stderr, msg)
+			}
+
 			continue
 		}
 
@@ -719,24 +748,44 @@ func (proxy *proxy) serve() {
 	}
 }
 
-func proxyMain() {
+func proxyMain(uri string) {
 	var err error
 
+	if podInstance {
+		proxyLog.WithField("mode", "pod").Info("starting")
+	} else {
+		fmt.Fprintln(os.Stderr, "starting in system mode")
+	}
+
 	proxy := newProxy()
-	if err := proxy.init(); err != nil {
-		fmt.Fprintln(os.Stderr, "init:", err.Error())
+	if err := proxy.init(uri); err != nil {
+		if podInstance {
+			proxyLog.WithError(err).Error("init failed")
+		} else {
+			fmt.Fprint(os.Stderr, "init failed: ", err.Error())
+		}
+
 		os.Exit(1)
 	}
 
-	// Init and tune KSM if available
-	proxyKSM, err = startKSM(defaultKSMRoot, proxyKSMMode)
-	if err != nil {
-		// KSM failure should not be fatal
-		fmt.Fprintln(os.Stderr, "init:", err.Error())
-	} else {
-		defer func() {
-			_ = proxyKSM.restore()
-		}()
+	// KSM is only available when running as a system-level daemon
+	// (where a URI is unecessary).
+	if !podInstance {
+		// Init and tune KSM if available
+		proxyKSM, err = startKSM(defaultKSMRoot, proxyKSMMode)
+		if err != nil {
+			// KSM failure should not be fatal
+			msg := "KSM setup failed"
+			if podInstance {
+				proxyLog.WithError(err).Warn(msg)
+			} else {
+				fmt.Fprintf(os.Stderr, "%s: %s\n", msg, err.Error())
+			}
+		} else {
+			defer func() {
+				_ = proxyKSM.restore()
+			}()
+		}
 	}
 
 	proxy.serve()
@@ -786,6 +835,19 @@ func SetLoggingParams(logLevel string) error {
 		TimestampFormat: time.RFC3339Nano,
 	}
 
+	// log to syslog
+	if podInstance {
+		syslogHook, err := lsyslog.NewSyslogHook("",
+			"",
+			syslog.LOG_INFO|syslog.LOG_DAEMON,
+			"")
+		if err != nil {
+			return err
+		}
+
+		proxyLog.Logger.Hooks.Add(syslogHook)
+	}
+
 	return nil
 }
 
@@ -813,12 +875,16 @@ func (p *profiler) setup() {
 var Version = "unknown"
 var proxyKSMMode ksmMode
 
+// true if associated with a single POD
+var podInstance bool
+
 func main() {
 	doVersion := flag.Bool("version", false, "display the version")
 	logLevel := flag.String("log", "warn",
 		"log messages above specified level; one of debug, warn, error, fatal or panic")
 
 	var pprof profiler
+	var uri string
 
 	flag.BoolVar(&pprof.enabled, "pprof", false,
 		"enable pprof ")
@@ -826,12 +892,17 @@ func main() {
 		"host the pprof server will be bound to")
 	flag.UintVar(&pprof.port, "pprof-port", 6060,
 		"port the pprof server will be bound to")
+	flag.StringVar(&uri, "uri", "", "proxy socket URI (note: disables KSM entirely)")
 
 	proxyKSMMode = defaultKSMMode
 
 	flag.Var(&proxyKSMMode, "ksm", "KSM settings [off, initial, auto]")
 
 	flag.Parse()
+
+	if uri != "" {
+		podInstance = true
+	}
 
 	if err := SetLoggingParams(*logLevel); err != nil {
 		logrus.Fatal(err)
@@ -843,5 +914,5 @@ func main() {
 	}
 
 	pprof.setup()
-	proxyMain()
+	proxyMain(uri)
 }

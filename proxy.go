@@ -515,11 +515,6 @@ func forwardStdin(frame *api.Frame, userData interface{}) error {
 		return errors.New("stdin: client not associated with any I/O session")
 	}
 
-	// Don't try to forward stdin if it is empty.
-	if len(frame.Payload) == 0 {
-		return nil
-	}
-
 	return client.session.ForwardStdin(frame)
 }
 

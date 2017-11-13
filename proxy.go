@@ -751,15 +751,24 @@ func proxyMain(uri string) {
 		os.Exit(1)
 	}
 
-	// Init and tune KSM if available
-	proxyKSM, err = startKSM(defaultKSMRoot, proxyKSMMode)
-	if err != nil {
-		// KSM failure should not be fatal
-		fmt.Fprintln(os.Stderr, "init:", err.Error())
-	} else {
-		defer func() {
-			_ = proxyKSM.restore()
-		}()
+	// KSM is only available when running as a system-level daemon
+	// (where a URI is unecessary).
+	if !podInstance {
+		// Init and tune KSM if available
+		proxyKSM, err = startKSM(defaultKSMRoot, proxyKSMMode)
+		if err != nil {
+			// KSM failure should not be fatal
+			msg := "KSM setup failed"
+			if podInstance {
+				proxyLog.WithError(err).Warn(msg)
+			} else {
+				fmt.Fprintf(os.Stderr, "%s: %s\n", msg, err.Error())
+			}
+		} else {
+			defer func() {
+				_ = proxyKSM.restore()
+			}()
+		}
 	}
 
 	proxy.serve()
@@ -866,7 +875,7 @@ func main() {
 		"host the pprof server will be bound to")
 	flag.UintVar(&pprof.port, "pprof-port", 6060,
 		"port the pprof server will be bound to")
-	flag.StringVar(&uri, "uri", "", "proxy socket URI")
+	flag.StringVar(&uri, "uri", "", "proxy socket URI (note: disables KSM entirely)")
 
 	proxyKSMMode = defaultKSMMode
 

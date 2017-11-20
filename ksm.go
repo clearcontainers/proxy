@@ -355,11 +355,7 @@ func (k *ksm) restoreSysFS() error {
 		return err
 	}
 
-	if err = k.run.write(k.initialKSMRun); err != nil {
-		return err
-	}
-
-	return nil
+	return k.run.write(k.initialKSMRun)
 }
 
 func (k *ksm) restore() error {
@@ -421,11 +417,7 @@ func (k *ksm) tune(s ksmSetting) error {
 		return err
 	}
 
-	if err = k.run.write(ksmStart); err != nil {
-		return err
-	}
-
-	return nil
+	return k.run.write(ksmStart)
 }
 
 type ksmThrottleInterval struct {

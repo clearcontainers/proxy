@@ -130,11 +130,7 @@ func unmarshalResponse(resp *api.Frame, decoded interface{}) error {
 		return nil
 	}
 
-	if err := json.Unmarshal(resp.Payload, decoded); err != nil {
-		return err
-	}
-
-	return nil
+	return json.Unmarshal(resp.Payload, decoded)
 }
 
 // RegisterVMOptions holds extra arguments one can pass to the RegisterVM

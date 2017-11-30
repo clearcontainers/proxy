@@ -69,9 +69,6 @@ var proxyLog = logrus.WithFields(logrus.Fields{
 	"pid":    os.Getpid(),
 })
 
-// KSM setting
-var proxyKSM *ksm
-
 // Main struct holding the proxy state
 type proxy struct {
 	// Protect concurrent accesses from separate client goroutines to this
@@ -263,10 +260,6 @@ func registerVM(data []byte, userData interface{}, response *handlerResponse) {
 
 	client.vm = vm
 
-	if proxyKSM != nil {
-		proxyKSM.kick()
-	}
-
 	// We start one goroutine per-VM to monitor the qemu process
 	proxy.wg.Add(1)
 	go func() {
@@ -343,10 +336,6 @@ func unregisterVM(data []byte, userData interface{}, response *handlerResponse) 
 	proxy.Unlock()
 
 	client.vm = nil
-
-	if !podInstance {
-		return
-	}
 
 	// Signal the proxy to exit
 	proxy.finished = true
@@ -725,17 +714,11 @@ func (proxy *proxy) serve() {
 	for {
 		conn, err := proxy.listener.Accept()
 		if err != nil {
-			if podInstance && proxy.finished {
+			if proxy.finished {
 				break
 			}
 
-			msg := fmt.Sprint("couldn't accept connection:", err)
-			if podInstance {
-				proxyLog.Info(msg)
-			} else {
-				fmt.Fprintln(os.Stderr, msg)
-			}
-
+			proxyLog.Infof("couldn't accept connection:", err)
 			continue
 		}
 
@@ -744,43 +727,10 @@ func (proxy *proxy) serve() {
 }
 
 func proxyMain(uri string) {
-	var err error
-
-	if podInstance {
-		proxyLog.WithField("mode", "pod").Info("starting")
-	} else {
-		fmt.Fprintln(os.Stderr, "starting in system mode")
-	}
-
 	proxy := newProxy()
 	if err := proxy.init(uri); err != nil {
-		if podInstance {
-			proxyLog.WithError(err).Error("init failed")
-		} else {
-			fmt.Fprint(os.Stderr, "init failed: ", err.Error())
-		}
-
+		proxyLog.WithError(err).Error("init failed")
 		os.Exit(1)
-	}
-
-	// KSM is only available when running as a system-level daemon
-	// (where a URI is unecessary).
-	if !podInstance {
-		// Init and tune KSM if available
-		proxyKSM, err = startKSM(defaultKSMRoot, proxyKSMMode)
-		if err != nil {
-			// KSM failure should not be fatal
-			msg := "KSM setup failed"
-			if podInstance {
-				proxyLog.WithError(err).Warn(msg)
-			} else {
-				fmt.Fprintf(os.Stderr, "%s: %s\n", msg, err.Error())
-			}
-		} else {
-			defer func() {
-				_ = proxyKSM.restore()
-			}()
-		}
 	}
 
 	proxy.serve()
@@ -831,17 +781,15 @@ func SetLoggingParams(logLevel string) error {
 	}
 
 	// log to syslog
-	if podInstance {
-		syslogHook, err := lsyslog.NewSyslogHook("",
-			"",
-			syslog.LOG_INFO|syslog.LOG_DAEMON,
-			name)
-		if err != nil {
-			return err
-		}
-
-		proxyLog.Logger.Hooks.Add(syslogHook)
+	syslogHook, err := lsyslog.NewSyslogHook("",
+		"",
+		syslog.LOG_INFO|syslog.LOG_DAEMON,
+		name)
+	if err != nil {
+		return err
 	}
+
+	proxyLog.Logger.Hooks.Add(syslogHook)
 
 	return nil
 }
@@ -868,10 +816,6 @@ func (p *profiler) setup() {
 
 // Version is the proxy version. This variable is populated at build time.
 var Version = "unknown"
-var proxyKSMMode ksmMode
-
-// true if associated with a single POD
-var podInstance bool
 
 func main() {
 	doVersion := flag.Bool("version", false, "display the version")
@@ -887,17 +831,9 @@ func main() {
 		"host the pprof server will be bound to")
 	flag.UintVar(&pprof.port, "pprof-port", 6060,
 		"port the pprof server will be bound to")
-	flag.StringVar(&uri, "uri", "", "proxy socket URI (note: disables KSM entirely)")
-
-	proxyKSMMode = defaultKSMMode
-
-	flag.Var(&proxyKSMMode, "ksm", "KSM settings [off, initial, auto]")
+	flag.StringVar(&uri, "uri", "", "proxy socket URI")
 
 	flag.Parse()
-
-	if uri != "" {
-		podInstance = true
-	}
 
 	if err := SetLoggingParams(*logLevel); err != nil {
 		logrus.Fatal(err)

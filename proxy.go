@@ -637,35 +637,23 @@ func (proxy *proxy) init(uri string) error {
 	if proxy.socketPath, err = getSocketPath(uri); err != nil {
 		return fmt.Errorf("couldn't get a valid socket path: %v", err)
 	}
-	fds := listenFds()
 
-	if len(fds) > 1 {
-		return fmt.Errorf("too many activated sockets (%d)", len(fds))
-	} else if len(fds) == 1 {
-		fd := fds[0]
-		l, err = net.FileListener(fd)
-		if err != nil {
-			return fmt.Errorf("couldn't listen on socket: %v", err)
-		}
-
-	} else {
-		socketDir := filepath.Dir(proxy.socketPath)
-		if err = os.MkdirAll(socketDir, 0750); err != nil {
-			return fmt.Errorf("couldn't create socket directory: %v", err)
-		}
-		if err = os.Remove(proxy.socketPath); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("couldn't remove exiting socket: %v", err)
-		}
-		l, err = net.ListenUnix("unix", &net.UnixAddr{Name: proxy.socketPath, Net: "unix"})
-		if err != nil {
-			return fmt.Errorf("couldn't create AF_UNIX socket: %v", err)
-		}
-		if err = os.Chmod(proxy.socketPath, 0660|os.ModeSocket); err != nil {
-			return fmt.Errorf("couldn't set mode on socket: %v", err)
-		}
-
-		proxyLog.Info("listening on ", proxy.socketPath)
+	socketDir := filepath.Dir(proxy.socketPath)
+	if err = os.MkdirAll(socketDir, 0750); err != nil {
+		return fmt.Errorf("couldn't create socket directory: %v", err)
 	}
+	if err = os.Remove(proxy.socketPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("couldn't remove exiting socket: %v", err)
+	}
+	l, err = net.ListenUnix("unix", &net.UnixAddr{Name: proxy.socketPath, Net: "unix"})
+	if err != nil {
+		return fmt.Errorf("couldn't create AF_UNIX socket: %v", err)
+	}
+	if err = os.Chmod(proxy.socketPath, 0660|os.ModeSocket); err != nil {
+		return fmt.Errorf("couldn't set mode on socket: %v", err)
+	}
+
+	proxyLog.Info("listening on ", proxy.socketPath)
 
 	proxy.listener = l
 

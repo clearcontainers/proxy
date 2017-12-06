@@ -835,7 +835,7 @@ func SetLoggingParams(logLevel string) error {
 		syslogHook, err := lsyslog.NewSyslogHook("",
 			"",
 			syslog.LOG_INFO|syslog.LOG_DAEMON,
-			"")
+			name)
 		if err != nil {
 			return err
 		}

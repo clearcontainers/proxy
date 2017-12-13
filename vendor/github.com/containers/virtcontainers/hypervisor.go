@@ -44,6 +44,8 @@ const (
 	defaultVCPUs = 1
 	// 2 GiB
 	defaultMemSzMiB = 2048
+
+	defaultBridges = 1
 )
 
 // deviceType describes a virtualized device type.
@@ -161,6 +163,10 @@ type HypervisorConfig struct {
 	// Pod configuration VMConfig.Memory overwrites this.
 	DefaultMemSz uint32
 
+	// DefaultBridges specifies default number of bridges for the VM.
+	// Bridges can be used to hot plug devices
+	DefaultBridges uint32
+
 	// MemPrealloc specifies if the memory should be pre-allocated
 	MemPrealloc bool
 
@@ -178,6 +184,12 @@ type HypervisorConfig struct {
 	// DisableNestingChecks is used to override customizations performed
 	// when running on top of another VMM.
 	DisableNestingChecks bool
+
+	// customAssets is a map of assets.
+	// Each value in that map takes precedence over the configured assets.
+	// For example, if there is a value for the "kernel" key in this map,
+	// it will be used for the pod's kernel path instead of KernelPath.
+	customAssets map[assetType]*asset
 }
 
 func (conf *HypervisorConfig) valid() (bool, error) {
@@ -197,6 +209,10 @@ func (conf *HypervisorConfig) valid() (bool, error) {
 		conf.DefaultMemSz = defaultMemSzMiB
 	}
 
+	if conf.DefaultBridges == 0 {
+		conf.DefaultBridges = defaultBridges
+	}
+
 	return true, nil
 }
 
@@ -210,6 +226,99 @@ func (conf *HypervisorConfig) AddKernelParam(p Param) error {
 	conf.KernelParams = append(conf.KernelParams, p)
 
 	return nil
+}
+
+func (conf *HypervisorConfig) addCustomAsset(a *asset) error {
+	if a == nil || a.path == "" {
+		// We did not get a custom asset, we will use the default one.
+		return nil
+	}
+
+	if !a.valid() {
+		return fmt.Errorf("Invalid %s at %s", a.kind, a.path)
+	}
+
+	virtLog.Debugf("Using custom %v asset %s", a.kind, a.path)
+
+	if conf.customAssets == nil {
+		conf.customAssets = make(map[assetType]*asset)
+	}
+
+	conf.customAssets[a.kind] = a
+
+	return nil
+}
+
+func (conf *HypervisorConfig) assetPath(t assetType) (string, error) {
+	// Custom assets take precedence over the configured ones
+	a, ok := conf.customAssets[t]
+	if ok {
+		return a.path, nil
+	}
+
+	// We could not find a custom asset for the given type, let's
+	// fall back to the configured ones.
+	switch t {
+	case kernelAsset:
+		return conf.KernelPath, nil
+	case imageAsset:
+		return conf.ImagePath, nil
+	case hypervisorAsset:
+		return conf.HypervisorPath, nil
+	case firmwareAsset:
+		return conf.FirmwarePath, nil
+	default:
+		return "", fmt.Errorf("Unknown asset type %v", t)
+	}
+}
+
+func (conf *HypervisorConfig) isCustomAsset(t assetType) bool {
+	_, ok := conf.customAssets[t]
+	if ok {
+		return true
+	}
+
+	return false
+}
+
+// KernelAssetPath returns the guest kernel path
+func (conf *HypervisorConfig) KernelAssetPath() (string, error) {
+	return conf.assetPath(kernelAsset)
+}
+
+// CustomKernelAsset returns true if the kernel asset is a custom one, false otherwise.
+func (conf *HypervisorConfig) CustomKernelAsset() bool {
+	return conf.isCustomAsset(kernelAsset)
+}
+
+// ImageAssetPath returns the guest image path
+func (conf *HypervisorConfig) ImageAssetPath() (string, error) {
+	return conf.assetPath(imageAsset)
+}
+
+// CustomImageAsset returns true if the image asset is a custom one, false otherwise.
+func (conf *HypervisorConfig) CustomImageAsset() bool {
+	return conf.isCustomAsset(imageAsset)
+}
+
+// HypervisorAssetPath returns the VM hypervisor path
+func (conf *HypervisorConfig) HypervisorAssetPath() (string, error) {
+	return conf.assetPath(hypervisorAsset)
+}
+
+// CustomHypervisorAsset returns true if the hypervisor asset is a custom one, false otherwise.
+func (conf *HypervisorConfig) CustomHypervisorAsset() bool {
+	return conf.isCustomAsset(hypervisorAsset)
+}
+
+// FirmwareAssetPath returns the guest firmware path
+func (conf *HypervisorConfig) FirmwareAssetPath() (string, error) {
+	return conf.assetPath(firmwareAsset)
+}
+
+// CustomFirmwareAsset returns true if the firmware asset is a custom one, false otherwise.
+func (conf *HypervisorConfig) CustomFirmwareAsset() bool {
+	return conf.isCustomAsset(firmwareAsset)
 }
 
 func appendParam(params []Param, parameter string, value string) []Param {
@@ -335,9 +444,10 @@ func RunningOnVMM(cpuInfoPath string) (bool, error) {
 // hypervisor is the virtcontainers hypervisor interface.
 // The default hypervisor implementation is Qemu.
 type hypervisor interface {
-	init(config HypervisorConfig) error
+	init(pod *Pod) error
 	createPod(podConfig PodConfig) error
-	startPod(startCh, stopCh chan struct{}) error
+	startPod() error
+	waitPod(timeout int) error
 	stopPod() error
 	pausePod() error
 	resumePod() error
@@ -346,4 +456,5 @@ type hypervisor interface {
 	hotplugRemoveDevice(devInfo interface{}, devType deviceType) error
 	getPodConsole(podID string) string
 	capabilities() capabilities
+	getState() interface{}
 }

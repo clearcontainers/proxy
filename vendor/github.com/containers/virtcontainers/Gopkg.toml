@@ -70,11 +70,11 @@
 
 [[constraint]]
   name = "github.com/containernetworking/cni"
-  revision = "ff7c3e02e3c212f63a642ad64a5ed22ee54450bd"
+  revision = "384d8c0b5288c25b9f1da901c66ea5155e6c567d"
 
 [[constraint]]
   name = "github.com/containernetworking/plugins"
-  revision = "e256564546e8d1ca8a36911f8445c11929043221"
+  revision = "7f98c94613021d8b57acfa1a2f0c8d0f6fd7ae5a"
 
 [[constraint]]
   name = "github.com/davecgh/go-spew"
@@ -114,7 +114,7 @@
 
 [[constraint]]
   name = "github.com/vishvananda/netlink"
-  revision = "b7fbf1f5291ecf8ae5179d3202e914cb98cfe400"
+  revision = "c2a3de3b38bd00f07290c3c5e12b4dbc04ec8666"
 
 [[constraint]]
   name = "github.com/vishvananda/netns"
@@ -134,5 +134,5 @@
 
 
 [[constraint]]
-  name = "github.com/01org/ciao"
-  revision = "b2a8a2ecea1318ae28a0861191ec385532491b5a"
+  name = "github.com/ciao-project/ciao"
+  revision = "239f5bc3e8e5fe18e6b4df31dcd692db5692c55f"

@@ -187,6 +187,15 @@ func makeBlockDevIDForHypervisor(deviceID string) string {
 }
 
 func (device *BlockDevice) attach(h hypervisor, c *Container) (err error) {
+	// If VM has not been launched yet, return immediately.
+	// This is because we always want to hotplug block devices.
+	// Eventually attachDevices will be called only after VM is launched,
+	// and this check can be taken out.
+	// See https://github.com/containers/virtcontainers/issues/444
+	if c.state.State == "" {
+		return nil
+	}
+
 	randBytes, err := generateRandomBytes(8)
 	if err != nil {
 		return err
@@ -222,22 +231,11 @@ func (device *BlockDevice) attach(h hypervisor, c *Container) (err error) {
 
 	deviceLogger().WithField("device", device.DeviceInfo.HostPath).Info("Attaching block device")
 
-	// We are cold-plugging block devices for now until hot-plugging issues for vfio
-	// devices are fixed. After that we need to move towards  hotplugging all devices.
-	// See https://github.com/containers/virtcontainers/issues/444
-	if c.state.State == "" {
-		if err = h.addDevice(drive, blockDev); err != nil {
-			return err
-		}
-
-		device.DeviceInfo.Hotplugged = false
-	} else {
-		if err = h.hotplugAddDevice(drive, blockDev); err != nil {
-			return err
-		}
-
-		device.DeviceInfo.Hotplugged = true
+	if err = h.hotplugAddDevice(drive, blockDev); err != nil {
+		return err
 	}
+
+	device.DeviceInfo.Hotplugged = true
 
 	device.VirtPath = filepath.Join("/dev", driveName)
 	return nil
@@ -407,4 +405,77 @@ func getBDF(deviceSysStr string) (string, error) {
 
 	tokens = strings.SplitN(deviceSysStr, ":", 2)
 	return tokens[1], nil
+}
+
+// bind/unbind paths to aid in SRIOV VF bring-up/restore
+var pciDriverUnbindPath = "/sys/bus/pci/devices/%s/driver/unbind"
+var pciDriverBindPath = "/sys/bus/pci/drivers/%s/bind"
+var vfioRemoveIDPath = "/sys/bus/pci/drivers/vfio-pci/remove_id"
+var vfioNewIDPath = "/sys/bus/pci/drivers/vfio-pci/new_id"
+
+// bindDevicetoVFIO binds the device to vfio driver after unbinding from host.
+// Will be called by a network interface or a generic pcie device.
+func bindDevicetoVFIO(bdf, hostDriver, vendorDeviceID string) error {
+
+	// Unbind from the host driver
+	unbindDriverPath := fmt.Sprintf(pciDriverUnbindPath, bdf)
+	deviceLogger().WithFields(logrus.Fields{
+		"device-bdf":  bdf,
+		"driver-path": unbindDriverPath,
+	}).Info("Unbinding device from driver")
+
+	if err := writeToFile(unbindDriverPath, []byte(bdf)); err != nil {
+		return err
+	}
+
+	// Add device id to vfio driver.
+	deviceLogger().WithFields(logrus.Fields{
+		"vendor-device-id": vendorDeviceID,
+		"vfio-new-id-path": vfioNewIDPath,
+	}).Info("Writing vendor-device-id to vfio new-id path")
+
+	if err := writeToFile(vfioNewIDPath, []byte(vendorDeviceID)); err != nil {
+		return err
+	}
+
+	// Bind to vfio-pci driver.
+	bindDriverPath := fmt.Sprintf(pciDriverBindPath, "vfio-pci")
+
+	deviceLogger().WithFields(logrus.Fields{
+		"device-bdf":  bdf,
+		"driver-path": bindDriverPath,
+	}).Info("Binding device to vfio driver")
+
+	// Device may be already bound at this time because of earlier write to new_id, ignore error
+	writeToFile(bindDriverPath, []byte(bdf))
+
+	return nil
+}
+
+// bindDevicetoHost binds the device to the host driver driver after unbinding from vfio-pci.
+func bindDevicetoHost(bdf, hostDriver, vendorDeviceID string) error {
+	// Unbind from vfio-pci driver
+	unbindDriverPath := fmt.Sprintf(pciDriverUnbindPath, bdf)
+	deviceLogger().WithFields(logrus.Fields{
+		"device-bdf":  bdf,
+		"driver-path": unbindDriverPath,
+	}).Info("Unbinding device from driver")
+
+	if err := writeToFile(unbindDriverPath, []byte(bdf)); err != nil {
+		return err
+	}
+
+	// To prevent new VFs from binding to VFIO-PCI, remove_id
+	if err := writeToFile(vfioRemoveIDPath, []byte(vendorDeviceID)); err != nil {
+		return err
+	}
+
+	// Bind back to host driver
+	bindDriverPath := fmt.Sprintf(pciDriverBindPath, hostDriver)
+	deviceLogger().WithFields(logrus.Fields{
+		"device-bdf":  bdf,
+		"driver-path": bindDriverPath,
+	}).Info("Binding back device to host driver")
+
+	return writeToFile(bindDriverPath, []byte(bdf))
 }

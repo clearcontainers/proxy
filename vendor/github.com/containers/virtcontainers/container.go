@@ -187,16 +187,6 @@ func (c *Container) setStateFstype(fstype string) error {
 	return nil
 }
 
-func (c *Container) setStateRootfsBlockChecked(checked bool) error {
-	c.state.RootfsBlockChecked = checked
-	err := c.pod.storage.storeContainerResource(c.pod.id, c.id, stateFileType, c.state)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func (c *Container) setStateHotpluggedDrive(hotplugged bool) error {
 	c.state.HotpluggedDrive = hotplugged
 
@@ -235,11 +225,7 @@ func (c *Container) startShim() error {
 
 	c.process = *process
 
-	if err := c.storeProcess(); err != nil {
-		return err
-	}
-
-	return nil
+	return c.storeProcess()
 }
 
 func (c *Container) storeProcess() error {
@@ -282,9 +268,12 @@ func fetchContainer(pod *Pod, containerID string) (*Container, error) {
 		return nil, err
 	}
 
-	pod.Logger().WithField("config", config).Debug("Container config")
+	container, err := createContainer(pod, config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create container with config %v in pod %v: %v", config, pod.id, err)
+	}
 
-	return createContainer(pod, config)
+	return container, nil
 }
 
 // storeContainer stores a container config.
@@ -516,14 +505,12 @@ func (c *Container) start() error {
 	}
 	defer c.pod.proxy.disconnect()
 
-	if !c.state.RootfsBlockChecked {
-		agentCaps := c.pod.agent.capabilities()
-		hypervisorCaps := c.pod.hypervisor.capabilities()
+	agentCaps := c.pod.agent.capabilities()
+	hypervisorCaps := c.pod.hypervisor.capabilities()
 
-		if agentCaps.isBlockDeviceSupported() && hypervisorCaps.isBlockDeviceHotplugSupported() {
-			if err := c.hotplugDrive(); err != nil {
-				return err
-			}
+	if agentCaps.isBlockDeviceSupported() && hypervisorCaps.isBlockDeviceHotplugSupported() {
+		if err := c.hotplugDrive(); err != nil {
+			return err
 		}
 	}
 
@@ -727,7 +714,7 @@ func (c *Container) processList(options ProcessListOptions) (ProcessList, error)
 
 func (c *Container) createShimProcess(token, url string, cmd Cmd) (*Process, error) {
 	if c.pod.state.URL != url {
-		return &Process{}, fmt.Errorf("Pod URL %s and URL from proxy %s MUST be identical", c.pod.state.URL, url)
+		return &Process{}, fmt.Errorf("Pod URL %q and URL from proxy %q MUST be identical", c.pod.state.URL, url)
 	}
 
 	shimParams := ShimParams{
@@ -757,10 +744,6 @@ func newProcess(token string, pid int) Process {
 }
 
 func (c *Container) hotplugDrive() error {
-	defer func() {
-		c.setStateRootfsBlockChecked(true)
-	}()
-
 	dev, err := getDeviceForPath(c.rootFs)
 
 	if err == errMountPointNotFound {
@@ -798,7 +781,7 @@ func (c *Container) hotplugDrive() error {
 	}).Info("Block device detected")
 
 	// Add drive with id as container id
-	devID := fmt.Sprintf("drive-%s", c.id)
+	devID := makeBlockDevIDForHypervisor(c.id)
 	drive := Drive{
 		File:   devicePath,
 		Format: "raw",
@@ -819,11 +802,7 @@ func (c *Container) hotplugDrive() error {
 		return err
 	}
 
-	if err := c.setStateFstype(fsType); err != nil {
-		return err
-	}
-
-	return nil
+	return c.setStateFstype(fsType)
 }
 
 // isDriveUsed checks if a drive has been used for container rootfs
@@ -838,7 +817,7 @@ func (c *Container) removeDrive() (err error) {
 	if c.isDriveUsed() && c.state.HotpluggedDrive {
 		c.Logger().Info("unplugging block device")
 
-		devID := fmt.Sprintf("drive-%s", c.id)
+		devID := makeBlockDevIDForHypervisor(c.id)
 		drive := Drive{
 			ID: devID,
 		}

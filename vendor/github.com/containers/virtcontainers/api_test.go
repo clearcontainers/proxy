@@ -274,7 +274,7 @@ func TestCreatePodFailing(t *testing.T) {
 	config := PodConfig{}
 
 	p, err := CreatePod(config)
-	if p != nil || err == nil {
+	if p.(*Pod) != nil || err == nil {
 		t.Fatal()
 	}
 }
@@ -595,13 +595,17 @@ func TestStatusPodSuccessfulStateReady(t *testing.T) {
 		KernelPath:     filepath.Join(testDir, testKernel),
 		ImagePath:      filepath.Join(testDir, testImage),
 		HypervisorPath: filepath.Join(testDir, testHypervisor),
+		DefaultVCPUs:   defaultVCPUs,
+		DefaultMemSz:   defaultMemSzMiB,
+		DefaultBridges: defaultBridges,
 	}
 
 	expectedStatus := PodStatus{
 		ID: testPodID,
 		State: State{
-			State: StateReady,
-			URL:   "noopProxyURL",
+			State:    StateReady,
+			URL:      "noopProxyURL",
+			ProxyPid: 0,
 		},
 		Hypervisor:       MockHypervisor,
 		HypervisorConfig: hypervisorConfig,
@@ -648,6 +652,9 @@ func TestStatusPodSuccessfulStateRunning(t *testing.T) {
 		KernelPath:     filepath.Join(testDir, testKernel),
 		ImagePath:      filepath.Join(testDir, testImage),
 		HypervisorPath: filepath.Join(testDir, testHypervisor),
+		DefaultVCPUs:   defaultVCPUs,
+		DefaultMemSz:   defaultMemSzMiB,
+		DefaultBridges: defaultBridges,
 	}
 
 	expectedStatus := PodStatus{

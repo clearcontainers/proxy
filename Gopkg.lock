@@ -4,7 +4,7 @@
 [[projects]]
   name = "github.com/containers/virtcontainers"
   packages = ["pkg/hyperstart","pkg/hyperstart/mock"]
-  revision = "2687abf41549ad806f2bf955b06467254219da5e"
+  revision = "d2342c73a2b486736b2f88164b13b542873115dc"
 
 [[projects]]
   name = "github.com/davecgh/go-spew"
@@ -43,6 +43,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "c6508cfb731879ec47dd8b2ea279dcbc58139d75a6821ab0b93dfdee2cd338a8"
+  inputs-digest = "dcfe8aebc210a8d1b64a73cbb480e4e535ecf2ec945a8bf6bb6846913b1a6d7c"
   solver-name = "gps-cdcl"
   solver-version = 1

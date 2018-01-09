@@ -16,7 +16,8 @@ https://www.opencontainers.org/) solution.
 `cc-proxy` is a daemon offering access to the [`agent`](
 https://github.com/clearcontainers/agent) to both the runtime and shim
 processes. Only a single instance of `cc-proxy` per host is necessary as it can
-be used for several different VMs.
+be used for several different VMs. Since [Clear Containers 3.0.10](https://github.com/clearcontainers/runtime/releases/tag/3.0.10),
+one proxy instance per virtual machine is launched for improved isolation.
 
 ![High-level Architecture Diagram](docs/high-level-overview.png)
 

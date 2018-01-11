@@ -3,8 +3,11 @@
 
 [[projects]]
   name = "github.com/containers/virtcontainers"
-  packages = ["pkg/hyperstart","pkg/hyperstart/mock"]
-  revision = "d2342c73a2b486736b2f88164b13b542873115dc"
+  packages = [
+    "pkg/hyperstart",
+    "pkg/hyperstart/mock"
+  ]
+  revision = "3a6bd62b25e130dc142ba430cf3b45c975d1878e"
 
 [[projects]]
   name = "github.com/davecgh/go-spew"
@@ -20,7 +23,11 @@
 
 [[projects]]
   name = "github.com/sirupsen/logrus"
-  packages = [".","hooks/syslog","hooks/test"]
+  packages = [
+    ".",
+    "hooks/syslog",
+    "hooks/test"
+  ]
   revision = "89742aefa4b206dcf400792f3bd35b542998eb3b"
 
 [[projects]]
@@ -37,12 +44,15 @@
 [[projects]]
   branch = "master"
   name = "golang.org/x/sys"
-  packages = ["unix","windows"]
+  packages = [
+    "unix",
+    "windows"
+  ]
   revision = "43eea11bc92608addb41b8a406b0407495c106f6"
 
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "dcfe8aebc210a8d1b64a73cbb480e4e535ecf2ec945a8bf6bb6846913b1a6d7c"
+  inputs-digest = "09b25cdeaee29b92e5a389729654150542ab9b97c71011abee889cc73ea63b97"
   solver-name = "gps-cdcl"
   solver-version = 1

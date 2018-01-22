@@ -17,7 +17,6 @@ package main
 import (
 	"encoding/json"
 	"net"
-	"os"
 	"strings"
 	"sync"
 	"syscall"
@@ -107,8 +106,6 @@ func (rig *testRig) Start() {
 }
 
 func (rig *testRig) Stop() {
-	var err error
-
 	rig.Client.Close()
 
 	for _, conn := range rig.proxyConns {
@@ -124,14 +121,6 @@ func (rig *testRig) Stop() {
 	if rig.proxy != nil {
 		rig.proxy.wg.Wait()
 	}
-
-	// We shouldn't have leaked a fd between the beginning of Start() and
-	// the end of Stop().
-	rig.stopFds, err = rig.detector.Snapshot()
-	assert.Nil(rig.t, err)
-
-	assert.True(rig.t,
-		rig.detector.Compare(os.Stdout, rig.startFds, rig.stopFds))
 }
 
 // SyncWithProxy can be used to make sure the goroutine serving the proxy has

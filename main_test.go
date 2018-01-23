@@ -31,14 +31,5 @@ func TestMain(m *testing.M) {
 		fmt.Fprint(os.Stderr, err)
 	}
 
-	if err := ksmTestPrepare(); err != nil {
-		ksmTestCleanup()
-		fmt.Fprint(os.Stderr, err)
-	}
-
-	exit := m.Run()
-
-	ksmTestCleanup()
-
-	os.Exit(exit)
+	os.Exit(m.Run())
 }

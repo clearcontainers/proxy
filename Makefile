@@ -14,18 +14,6 @@ VERSION_COMMIT := $(if $(COMMIT),$(VERSION)-$(COMMIT),$(VERSION))
 
 
 #
-# systemd files
-#
-
-HAVE_SYSTEMD := $(shell pkg-config --exists systemd 2>/dev/null && echo 'yes')
-
-ifeq ($(HAVE_SYSTEMD),yes)
-UNIT_DIR := $(shell pkg-config --variable=systemdsystemunitdir systemd)
-UNIT_FILES = cc-proxy.service cc-proxy.socket
-GENERATED_FILES += $(UNIT_FILES)
-endif
-
-#
 # Pretty printing
 #
 
@@ -35,7 +23,7 @@ QUIET_GOBUILD = $(Q:@=@echo    '     GOBUILD  '$@;)
 QUIET_GEN     = $(Q:@=@echo    '     GEN      '$@;)
 
 # Entry point
-all: cc-proxy $(UNIT_FILES)
+all: cc-proxy
 
 #
 # proxy
@@ -81,22 +69,13 @@ define INSTALL_FILE
 
 endef
 
-all-installable: cc-proxy $(UNIT_FILES)
+all-installable: cc-proxy
 
 install: all-installable
 	$(call INSTALL_EXEC,cc-proxy,$(LIBEXECDIR)/clear-containers)
-	$(foreach f,$(UNIT_FILES),$(call INSTALL_FILE,$f,$(UNIT_DIR)))
 
 clean:
-	rm -f cc-proxy $(GENERATED_FILES)
-
-$(GENERATED_FILES): %: %.in Makefile
-	@mkdir -p `dirname $@`
-	$(QUIET_GEN)sed \
-		-e 's|[@]bindir[@]|$(BINDIR)|g' \
-		-e 's|[@]libexecdir[@]|$(LIBEXECDIR)|' \
-		-e "s|[@]localstatedir[@]|$(LOCALSTATEDIR)|" \
-		"$<" > "$@"
+	rm -f cc-proxy
 
 #
 # dist

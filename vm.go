@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -230,13 +229,7 @@ func (vm *vm) ioHyperToClients() {
 
 		session := vm.findSessionBySeq(msg.Session)
 		if session == nil {
-			msg := fmt.Sprintf("couldn't find client with seq number %d", msg.Session)
-
-			if podInstance {
-				vm.logIO.Info(msg)
-			} else {
-				fmt.Fprintln(os.Stderr, msg)
-			}
+			vm.logIO.Infof("couldn't find client with seq number %d", msg.Session)
 			continue
 		}
 

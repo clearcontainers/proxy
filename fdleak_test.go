@@ -280,7 +280,7 @@ func TestFdDetectorLeak(t *testing.T) {
 		t.Error(err)
 	}
 
-	_, err = os.Open("/dev/null")
+	f, err := os.Open("/dev/null")
 	if err != nil {
 		t.Error(err)
 	}
@@ -295,6 +295,10 @@ func TestFdDetectorLeak(t *testing.T) {
 	if equal {
 		fmt.Print(buffer.String())
 		t.Fatal()
+	}
+
+	if err := f.Close(); err != nil {
+		t.Error(err)
 	}
 }
 

@@ -57,21 +57,20 @@ func ksmTestPrepare() error {
 	if err != nil {
 		return err
 	}
+	defer ksmTestRun.Close()
 
 	ksmTestPagesToScan, err := os.Create(filepath.Join(defaultKSMRoot, ksmPagesToScan))
 	if err != nil {
 		return err
 	}
+	defer ksmTestPagesToScan.Close()
 
 	ksmTestSleepMillisec, err := os.Create(filepath.Join(defaultKSMRoot, ksmSleepMillisec))
 	if err != nil {
 		return err
 	}
 
-	defer ksmTestRun.Close()
-	defer ksmTestPagesToScan.Close()
 	defer ksmTestSleepMillisec.Close()
-
 	return nil
 }
 

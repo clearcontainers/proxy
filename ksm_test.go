@@ -131,6 +131,18 @@ func initKSM(root string, t *testing.T) *ksm {
 	return k
 }
 
+func closeKSMFds(k *ksm) {
+	if k.run.file != nil {
+		_ = k.run.close()
+	}
+	if k.sleepInterval.file != nil {
+		_ = k.sleepInterval.close()
+	}
+	if k.pagesToScan.file != nil {
+		_ = k.pagesToScan.close()
+	}
+}
+
 func TestKSMAvailabilityDummy(t *testing.T) {
 	_, err := newKSM("foo")
 	assert.NotNil(t, err)
@@ -138,6 +150,7 @@ func TestKSMAvailabilityDummy(t *testing.T) {
 
 func TestKSMAvailability(t *testing.T) {
 	k := initKSM(defaultKSMRoot, t)
+	defer closeKSMFds(k)
 
 	err := k.isAvailable()
 	assert.Nil(t, err)
@@ -209,6 +222,7 @@ func TestKSMInit(t *testing.T) {
 	assert.Nil(t, err)
 
 	k := initKSM(defaultKSMRoot, t)
+	defer closeKSMFds(k)
 
 	assert.Equal(t, k.initialPagesToScan, scan)
 	assert.Equal(t, k.initialSleepInterval, interval)
@@ -250,6 +264,7 @@ func TestKSMRestore(t *testing.T) {
 	assert.Nil(t, err)
 
 	k := initKSM(defaultKSMRoot, t)
+	defer closeKSMFds(k)
 
 	// Write dummy values and read them back
 	var newInterval = "foo"
@@ -299,6 +314,7 @@ func TestKSMRestore(t *testing.T) {
 
 func TestKSMKick(t *testing.T) {
 	k := initKSM(defaultKSMRoot, t)
+	defer closeKSMFds(k)
 
 	timer := time.NewTimer(time.Second)
 	k.throttling = true
@@ -334,6 +350,7 @@ func TestKSMTune(t *testing.T) {
 	assert.Nil(t, err)
 
 	k := initKSM(defaultKSMRoot, t)
+	defer closeKSMFds(k)
 
 	for _, v := range ksmSettings {
 		err = k.tune(v)
@@ -474,6 +491,7 @@ func testThrottle(k *ksm, t *testing.T) {
 
 func TestKSMThrottle(t *testing.T) {
 	k := initKSM(defaultKSMRoot, t)
+	defer closeKSMFds(k)
 
 	// Let's make the throttling down faster, for quicker tests purpose.
 	ksmAggressiveInterval = 500 * time.Millisecond

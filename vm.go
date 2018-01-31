@@ -367,7 +367,7 @@ func newcontainerHandler(vm *vm, hyper *api.Hyper, session *ioSession) error {
 
 	session.containerID = cmdIn.ID
 
-	if err := relocateProcess(cmdIn.Process, session); err != nil {
+	if err := relocateProcess(&cmdIn.Process, session); err != nil {
 		return err
 	}
 

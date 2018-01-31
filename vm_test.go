@@ -108,7 +108,7 @@ func (rig *vmRig) createHyperCmd(vm *vm, cmdName string, numTokens int, data []b
 func (rig *vmRig) createNewcontainer(vm *vm, numTokens int) *api.Hyper {
 	process := rig.createBaseProcess()
 	cmd := hyperstart.Container{
-		Process: process,
+		Process: *process,
 	}
 
 	data, err := json.Marshal(&cmd)

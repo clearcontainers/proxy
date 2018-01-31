@@ -422,7 +422,7 @@ func TestHyperSequenceNumberRelocation(t *testing.T) {
 	// Send newcontainer hyper command
 	newcontainer := hyperstart.Container{
 		ID: testContainerID,
-		Process: &hyperstart.Process{
+		Process: hyperstart.Process{
 			Args: []string{"/bin/sh"},
 		},
 	}

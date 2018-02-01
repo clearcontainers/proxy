@@ -19,7 +19,6 @@ package virtcontainers
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"syscall"
 	"time"
 
@@ -36,13 +35,9 @@ const (
 
 	// NoopShimType is the noopShim.
 	NoopShimType ShimType = "noopShim"
-
-	// KataShimType is the Kata Containers shim type.
-	KataShimType ShimType = "kataShim"
 )
 
 var waitForShimTimeout = 5.0
-var consoleFileMode = os.FileMode(0660)
 
 // ShimParams is the structure providing specific parameters needed
 // for the execution of the shim binary.
@@ -52,14 +47,6 @@ type ShimParams struct {
 	URL       string
 	Console   string
 	Detach    bool
-	PID       int
-}
-
-// ShimConfig is the structure providing specific configuration
-// for shim implementations.
-type ShimConfig struct {
-	Path  string
-	Debug bool
 }
 
 // Set sets a shim type based on the input string.
@@ -70,9 +57,6 @@ func (pType *ShimType) Set(value string) error {
 		return nil
 	case "ccShim":
 		*pType = CCShimType
-		return nil
-	case "kataShim":
-		*pType = KataShimType
 		return nil
 	default:
 		return fmt.Errorf("Unknown shim type %s", value)
@@ -86,8 +70,6 @@ func (pType *ShimType) String() string {
 		return string(NoopShimType)
 	case CCShimType:
 		return string(CCShimType)
-	case KataShimType:
-		return string(KataShimType)
 	default:
 		return ""
 	}
@@ -100,8 +82,6 @@ func newShim(pType ShimType) (shim, error) {
 		return &noopShim{}, nil
 	case CCShimType:
 		return &ccShim{}, nil
-	case KataShimType:
-		return &kataShim{}, nil
 	default:
 		return &noopShim{}, nil
 	}
@@ -112,13 +92,13 @@ func newShimConfig(config PodConfig) interface{} {
 	switch config.ShimType {
 	case NoopShimType:
 		return nil
-	case CCShimType, KataShimType:
-		var shimConfig ShimConfig
-		err := mapstructure.Decode(config.ShimConfig, &shimConfig)
+	case CCShimType:
+		var ccConfig CCShimConfig
+		err := mapstructure.Decode(config.ShimConfig, &ccConfig)
 		if err != nil {
 			return err
 		}
-		return shimConfig
+		return ccConfig
 	default:
 		return nil
 	}
@@ -128,73 +108,18 @@ func shimLogger() *logrus.Entry {
 	return virtLog.WithField("subsystem", "shim")
 }
 
-func signalShim(pid int, sig syscall.Signal) error {
+func stopShim(pid int) error {
 	if pid <= 0 {
 		return nil
 	}
 
-	shimLogger().WithFields(
-		logrus.Fields{
-			"shim-pid":    pid,
-			"shim-signal": sig,
-		}).Info("Signalling shim")
+	shimLogger().WithField("shim-pid", pid).Info("Stopping shim")
 
-	if err := syscall.Kill(pid, sig); err != nil {
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
 		return err
 	}
 
 	return nil
-}
-
-func stopShim(pid int) error {
-	if err := signalShim(pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
-		return err
-	}
-
-	return nil
-}
-
-func startShim(args []string, params ShimParams) (int, error) {
-	cmd := exec.Command(args[0], args[1:]...)
-
-	if !params.Detach {
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-	}
-
-	var f *os.File
-	var err error
-	if params.Console != "" {
-		f, err = os.OpenFile(params.Console, os.O_RDWR, consoleFileMode)
-		if err != nil {
-			return -1, err
-		}
-
-		cmd.Stdin = f
-		cmd.Stdout = f
-		cmd.Stderr = f
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			// Create Session
-			Setsid: true,
-
-			// Set Controlling terminal to Ctty
-			Setctty: true,
-			Ctty:    int(f.Fd()),
-		}
-
-	}
-	defer func() {
-		if f != nil {
-			f.Close()
-		}
-	}()
-
-	if err := cmd.Start(); err != nil {
-		return -1, err
-	}
-
-	return cmd.Process.Pid, nil
 }
 
 func isShimRunning(pid int) (bool, error) {

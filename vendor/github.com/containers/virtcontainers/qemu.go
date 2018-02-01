@@ -186,7 +186,6 @@ var kernelDefaultParams = []Param{
 	{"iommu", "off"},
 	{"cryptomgr.notests", ""},
 	{"net.ifnames", "0"},
-	{"pci", "lastbus=0"},
 }
 
 // kernelDefaultParamsNonDebug is a list of the default kernel
@@ -287,27 +286,6 @@ func (q *qemu) appendBlockDevice(devices []govmmQemu.Device, drive Drive) []govm
 	return devices
 }
 
-func (q *qemu) appendVhostUserDevice(devices []govmmQemu.Device, vhostUserDevice VhostUserDevice) []govmmQemu.Device {
-
-	qemuVhostUserDevice := govmmQemu.VhostUserDevice{}
-
-	switch vhostUserDevice := vhostUserDevice.(type) {
-	case *VhostUserNetDevice:
-		qemuVhostUserDevice.TypeDevID = makeNameID("net", vhostUserDevice.ID)
-		qemuVhostUserDevice.Address = vhostUserDevice.MacAddress
-	case *VhostUserSCSIDevice:
-		qemuVhostUserDevice.TypeDevID = makeNameID("scsi", vhostUserDevice.ID)
-	case *VhostUserBlkDevice:
-	}
-
-	qemuVhostUserDevice.VhostUserType = govmmQemu.VhostUserDeviceType(vhostUserDevice.Type())
-	qemuVhostUserDevice.SocketPath = vhostUserDevice.Attrs().SocketPath
-	qemuVhostUserDevice.CharDevID = makeNameID("char", vhostUserDevice.Attrs().ID)
-
-	devices = append(devices, qemuVhostUserDevice)
-
-	return devices
-}
 func (q *qemu) appendVFIODevice(devices []govmmQemu.Device, vfDevice VFIODevice) []govmmQemu.Device {
 	if vfDevice.BDF == "" {
 		return devices
@@ -615,7 +593,7 @@ func (q *qemu) qmpSocketPath(socketName string) (string, error) {
 			parentDirPath, len(parentDirPath))
 	}
 
-	path := fmt.Sprintf("%s/%s-%s", parentDirPath, socketName, q.state.UUID)
+	path := fmt.Sprintf("%s/%s-%s", parentDirPath, q.state.UUID, socketName)
 
 	if len(path) > qmpSockPathSizeLimit {
 		return path[:qmpSockPathSizeLimit], nil
@@ -1018,25 +996,22 @@ func (q *qemu) resumePod() error {
 
 // addDevice will add extra devices to Qemu command line.
 func (q *qemu) addDevice(devInfo interface{}, devType deviceType) error {
-	switch v := devInfo.(type) {
-	case Volume:
-		q.qemuConfig.Devices = q.appendVolume(q.qemuConfig.Devices, v)
-	case Socket:
-		q.qemuConfig.Devices = q.appendSocket(q.qemuConfig.Devices, v)
-	case Endpoint:
-		q.qemuConfig.Devices = q.appendNetwork(q.qemuConfig.Devices, v)
-	case Drive:
-		q.qemuConfig.Devices = q.appendBlockDevice(q.qemuConfig.Devices, v)
-
-	//vhostUserDevice is an interface, hence the pointer for Net, SCSI and Blk:
-	case VhostUserNetDevice:
-		q.qemuConfig.Devices = q.appendVhostUserDevice(q.qemuConfig.Devices, &v)
-	case VhostUserSCSIDevice:
-		q.qemuConfig.Devices = q.appendVhostUserDevice(q.qemuConfig.Devices, &v)
-	case VhostUserBlkDevice:
-		q.qemuConfig.Devices = q.appendVhostUserDevice(q.qemuConfig.Devices, &v)
-	case VFIODevice:
-		q.qemuConfig.Devices = q.appendVFIODevice(q.qemuConfig.Devices, v)
+	switch devType {
+	case fsDev:
+		volume := devInfo.(Volume)
+		q.qemuConfig.Devices = q.appendVolume(q.qemuConfig.Devices, volume)
+	case serialPortDev:
+		socket := devInfo.(Socket)
+		q.qemuConfig.Devices = q.appendSocket(q.qemuConfig.Devices, socket)
+	case netDev:
+		endpoint := devInfo.(Endpoint)
+		q.qemuConfig.Devices = q.appendNetwork(q.qemuConfig.Devices, endpoint)
+	case blockDev:
+		drive := devInfo.(Drive)
+		q.qemuConfig.Devices = q.appendBlockDevice(q.qemuConfig.Devices, drive)
+	case vfioDev:
+		vfDevice := devInfo.(VFIODevice)
+		q.qemuConfig.Devices = q.appendVFIODevice(q.qemuConfig.Devices, vfDevice)
 	default:
 		break
 	}

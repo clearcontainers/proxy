@@ -17,8 +17,8 @@
 package virtcontainers
 
 import (
-	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"math/rand"
@@ -152,17 +152,6 @@ type PhysicalEndpoint struct {
 	VendorDeviceID     string
 }
 
-// VhostUserEndpoint represents a vhost-user socket based network interface
-type VhostUserEndpoint struct {
-	// Path to the vhost-user socket on the host system
-	SocketPath string
-	// MAC address of the interface
-	HardAddr           string
-	IfaceName          string
-	EndpointProperties NetworkInfo
-	EndpointType       EndpointType
-}
-
 // Properties returns properties for the veth interface in the network pair.
 func (endpoint *VirtualEndpoint) Properties() NetworkInfo {
 	return endpoint.EndpointProperties
@@ -210,69 +199,6 @@ func (endpoint *VirtualEndpoint) Attach(h hypervisor) error {
 func (endpoint *VirtualEndpoint) Detach() error {
 	networkLogger().Info("Detaching virtual endpoint")
 	return xconnectVMNetwork(&(endpoint.NetPair), false)
-}
-
-// Properties returns the properties of the interface.
-func (endpoint *VhostUserEndpoint) Properties() NetworkInfo {
-	return endpoint.EndpointProperties
-}
-
-// Name returns name of the interface.
-func (endpoint *VhostUserEndpoint) Name() string {
-	return endpoint.IfaceName
-}
-
-// HardwareAddr returns the mac address of the vhostuser network interface
-func (endpoint *VhostUserEndpoint) HardwareAddr() string {
-	return endpoint.HardAddr
-}
-
-// Type indentifies the endpoint as a vhostuser endpoint.
-func (endpoint *VhostUserEndpoint) Type() EndpointType {
-	return endpoint.EndpointType
-}
-
-// SetProperties sets the properties of the endpoint.
-func (endpoint *VhostUserEndpoint) SetProperties(properties NetworkInfo) {
-	endpoint.EndpointProperties = properties
-}
-
-// Attach for vhostuser endpoint
-func (endpoint *VhostUserEndpoint) Attach(h hypervisor) error {
-	networkLogger().Info("Attaching vhostuser based endpoint")
-
-	// generate a unique ID to be used for hypervisor commandline fields
-	randBytes, err := generateRandomBytes(8)
-	if err != nil {
-		return err
-	}
-	id := hex.EncodeToString(randBytes)
-
-	d := VhostUserNetDevice{
-		MacAddress: endpoint.HardAddr,
-	}
-	d.SocketPath = endpoint.SocketPath
-	d.ID = id
-
-	return h.addDevice(d, vhostuserDev)
-}
-
-// Detach for vhostuser endpoint
-func (endpoint *VhostUserEndpoint) Detach() error {
-	networkLogger().Info("Detaching vhostuser based endpoint")
-	return nil
-}
-
-// Create a vhostuser endpoint
-func createVhostUserEndpoint(netInfo NetworkInfo, socket string) (*VhostUserEndpoint, error) {
-
-	vhostUserEndpoint := &VhostUserEndpoint{
-		SocketPath:   socket,
-		HardAddr:     netInfo.Iface.HardwareAddr.String(),
-		IfaceName:    netInfo.Iface.Name,
-		EndpointType: VhostUserEndpointType,
-	}
-	return vhostUserEndpoint, nil
 }
 
 // Properties returns the properties of the physical interface.
@@ -335,9 +261,6 @@ const (
 
 	// VirtualEndpointType is the virtual network interface.
 	VirtualEndpointType EndpointType = "virtual"
-
-	// VhostUserEndpointType is the vhostuser network interface.
-	VhostUserEndpointType EndpointType = "vhost-user"
 )
 
 // Set sets an endpoint type based on the input string.
@@ -348,9 +271,6 @@ func (endpointType *EndpointType) Set(value string) error {
 		return nil
 	case "virtual":
 		*endpointType = VirtualEndpointType
-		return nil
-	case "vhost-user":
-		*endpointType = VhostUserEndpointType
 		return nil
 	default:
 		return fmt.Errorf("Unknown endpoint type %s", value)
@@ -364,8 +284,6 @@ func (endpointType *EndpointType) String() string {
 		return string(PhysicalEndpointType)
 	case VirtualEndpointType:
 		return string(VirtualEndpointType)
-	case VhostUserEndpointType:
-		return string(VhostUserEndpointType)
 	default:
 		return ""
 	}
@@ -464,16 +382,6 @@ func (n *NetworkNamespace) UnmarshalJSON(b []byte) error {
 
 			endpoints = append(endpoints, &endpoint)
 			virtLog.Infof("Virtual endpoint unmarshalled [%v]", endpoint)
-
-		case VhostUserEndpointType:
-			var endpoint VhostUserEndpoint
-			err := json.Unmarshal(e.Data, &endpoint)
-			if err != nil {
-				return err
-			}
-
-			endpoints = append(endpoints, &endpoint)
-			virtLog.Infof("VhostUser endpoint unmarshalled [%v]", endpoint)
 
 		default:
 			virtLog.Errorf("Unknown endpoint type received %s\n", e.Type)
@@ -672,7 +580,6 @@ func getLinkByName(netHandle *netlink.Handle, name string, expectedLink netlink.
 	return nil, fmt.Errorf("Incorrect link type %s, expecting %s", link.Type(), expectedLink.Type())
 }
 
-// The endpoint type should dictate how the connection needs to be made
 func xconnectVMNetwork(netPair *NetworkInterfacePair, connect bool) error {
 	switch DefaultNetInterworkingModel {
 	case ModelBridged:
@@ -1103,21 +1010,19 @@ func deleteNetNS(netNSPath string, mounted bool) error {
 	return nil
 }
 
-func createVirtualNetworkEndpoint(idx int, ifName string) (*VirtualEndpoint, error) {
+func createVirtualNetworkEndpoint(idx int, uniqueID string, ifName string) (*VirtualEndpoint, error) {
 	if idx < 0 {
 		return &VirtualEndpoint{}, fmt.Errorf("invalid network endpoint index: %d", idx)
 	}
-
-	uniqueID := uuid.Generate().String()
+	if uniqueID == "" {
+		return &VirtualEndpoint{}, errors.New("uniqueID cannot be blank")
+	}
 
 	hardAddr := net.HardwareAddr{0x02, 0x00, 0xCA, 0xFE, byte(idx >> 8), byte(idx)}
 
 	endpoint := &VirtualEndpoint{
-		// TODO This is too specific. We may need to create multiple
-		// end point types here and then decide how to connect them
-		// at the time of hypervisor attach and not here
 		NetPair: NetworkInterfacePair{
-			ID:   uniqueID,
+			ID:   fmt.Sprintf("%s-%d", uniqueID, idx),
 			Name: fmt.Sprintf("br%d", idx),
 			VirtIface: NetworkInterface{
 				Name:     fmt.Sprintf("eth%d", idx),
@@ -1142,8 +1047,10 @@ func createNetworkEndpoints(numOfEndpoints int) (endpoints []Endpoint, err error
 		return endpoints, fmt.Errorf("Invalid number of network endpoints")
 	}
 
+	uniqueID := uuid.Generate().String()
+
 	for i := 0; i < numOfEndpoints; i++ {
-		endpoint, err := createVirtualNetworkEndpoint(i, "")
+		endpoint, err := createVirtualNetworkEndpoint(i, uniqueID, "")
 		if err != nil {
 			return nil, err
 		}
@@ -1174,6 +1081,34 @@ func networkInfoFromLink(handle *netlink.Handle, link netlink.Link) (NetworkInfo
 	}, nil
 }
 
+func networkInfoListFromNetworkScan(handle *netlink.Handle) ([]NetworkInfo, error) {
+	var netInfoList []NetworkInfo
+
+	linkList, err := handle.LinkList()
+	if err != nil {
+		return []NetworkInfo{}, err
+	}
+
+	for _, link := range linkList {
+		netInfo, err := networkInfoFromLink(handle, link)
+		if err != nil {
+			return []NetworkInfo{}, err
+		}
+
+		// Ignore unconfigured network interfaces. These are
+		// either base tunnel devices that are not namespaced
+		// like gre0, gretap0, sit0, ipip0, tunl0 or incorrectly
+		// setup interfaces.
+		if len(netInfo.Addrs) == 0 {
+			continue
+		}
+
+		netInfoList = append(netInfoList, netInfo)
+	}
+
+	return netInfoList, nil
+}
+
 func createEndpointsFromScan(networkNSPath string) ([]Endpoint, error) {
 	var endpoints []Endpoint
 
@@ -1189,40 +1124,23 @@ func createEndpointsFromScan(networkNSPath string) ([]Endpoint, error) {
 	}
 	defer netlinkHandle.Delete()
 
-	linkList, err := netlinkHandle.LinkList()
+	netInfoList, err := networkInfoListFromNetworkScan(netlinkHandle)
 	if err != nil {
 		return []Endpoint{}, err
 	}
 
+	uniqueID := uuid.Generate().String()
+
 	idx := 0
-	for _, link := range linkList {
+	for _, netInfo := range netInfoList {
 		var endpoint Endpoint
 
-		netInfo, err := networkInfoFromLink(netlinkHandle, link)
-		if err != nil {
-			return []Endpoint{}, err
-		}
-
-		// Ignore unconfigured network interfaces. These are
-		// either base tunnel devices that are not namespaced
-		// like gre0, gretap0, sit0, ipip0, tunl0 or incorrectly
-		// setup interfaces.
-		if len(netInfo.Addrs) == 0 {
-			continue
-		}
-
-		// Skip any loopback interfaces:
+		// Skip any loopback interface.
 		if (netInfo.Iface.Flags & net.FlagLoopback) != 0 {
 			continue
 		}
 
 		if err := doNetNS(networkNSPath, func(_ ns.NetNS) error {
-
-			// TODO: This is the incoming interface
-			// based on the incoming interface we should create
-			// an appropriate EndPoint based on interface type
-			// This should be a switch
-
 			// Check if interface is a physical interface. Do not create
 			// tap interface/bridge if it is.
 			isPhysical, err := isPhysicalIface(netInfo.Iface.Name)
@@ -1234,18 +1152,7 @@ func createEndpointsFromScan(networkNSPath string) ([]Endpoint, error) {
 				cnmLogger().WithField("interface", netInfo.Iface.Name).Info("Physical network interface found")
 				endpoint, err = createPhysicalEndpoint(netInfo)
 			} else {
-				// Check if this is a dummy interface which has a vhost-user socket associated with it
-				socketPath, err := vhostUserSocketPath(netInfo)
-				if err != nil {
-					return err
-				}
-
-				if socketPath != "" {
-					cnmLogger().WithField("interface", netInfo.Iface.Name).Info("VhostUser network interface found")
-					endpoint, err = createVhostUserEndpoint(netInfo, socketPath)
-				} else {
-					endpoint, err = createVirtualNetworkEndpoint(idx, netInfo.Iface.Name)
-				}
+				endpoint, err = createVirtualNetworkEndpoint(idx, uniqueID, netInfo.Iface.Name)
 			}
 
 			return err

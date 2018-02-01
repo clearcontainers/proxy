@@ -17,6 +17,7 @@
 package virtcontainers
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,6 +34,7 @@ var defaultDeviceIDTemplate = "channel%d"
 var defaultIDTemplate = "charch%d"
 var defaultSharedDir = "/run/hyper/shared/pods/"
 var mountTag = "hyperShared"
+var rootfsDir = "rootfs"
 var maxHostnameLen = 64
 
 const (
@@ -120,15 +122,6 @@ func (h *hyper) buildHyperContainerProcess(cmd Cmd) (*hyperstart.Process, error)
 		User:             cmd.User,
 		Group:            cmd.PrimaryGroup,
 		AdditionalGroups: cmd.SupplementaryGroups,
-		NoNewPrivileges:  cmd.NoNewPrivileges,
-	}
-
-	process.Capabilities = hyperstart.Capabilities{
-		Bounding:    cmd.Capabilities.Bounding,
-		Effective:   cmd.Capabilities.Effective,
-		Inheritable: cmd.Capabilities.Inheritable,
-		Permitted:   cmd.Capabilities.Permitted,
-		Ambient:     cmd.Capabilities.Ambient,
 	}
 
 	return process, nil
@@ -219,21 +212,111 @@ func (h *hyper) buildNetworkInterfacesAndRoutes(pod Pod) ([]hyperstart.NetworkIf
 	return ifaces, routes, nil
 }
 
-func fsMapFromMounts(mounts []*Mount) []*hyperstart.FsmapDescriptor {
+func (h *hyper) bindMountContainerRootfs(podID, cID, cRootFs string, readonly bool) error {
+	rootfsDest := filepath.Join(defaultSharedDir, podID, cID, rootfsDir)
+
+	return bindMount(cRootFs, rootfsDest, readonly)
+}
+
+// bindMountContainerMounts handles bind-mounts by bindmounting to the host shared directory
+// which is mounted through 9pfs in the VM.
+// Hyperstart uses "fsmap" struct to bind mount these mounts in the hypertstart shared directory
+// to the correct mountpoint within the container rootfs.
+func (h *hyper) bindMountContainerMounts(podID string, cID string, mounts []Mount) ([]*hyperstart.FsmapDescriptor, error) {
+	if mounts == nil {
+		return nil, nil
+	}
+
 	var fsmap []*hyperstart.FsmapDescriptor
 
-	for _, m := range mounts {
+	// TODO: We need to handle system mounts by having the agent create them inside the VM.
+	// Handle just bind mounts for now
+
+	for ind := range mounts {
+		m := &(mounts[ind])
+
+		if isSystemMount(m.Destination) {
+			continue
+		}
+
+		if m.Type != "bind" {
+			continue
+		}
+
+		randBytes, err := generateRandomBytes(8)
+		if err != nil {
+			return nil, err
+		}
+
+		// These mounts are created in the hyperstart shared dir
+		filename := fmt.Sprintf("%s-%s-%s", cID, hex.EncodeToString(randBytes), filepath.Base(m.Destination))
+		mountDest := filepath.Join(defaultSharedDir, podID, filename)
+
+		err = bindMount(m.Source, mountDest, false)
+		if err != nil {
+			return nil, err
+		}
+
+		m.HostPath = mountDest
+
+		// Check if mount is readonly, let hyperstart handle the readonly mount within the VM
+		readonly := false
+		for _, flag := range m.Options {
+			if flag == "ro" {
+				readonly = true
+			}
+		}
+
 		fsmapDesc := &hyperstart.FsmapDescriptor{
-			Source:       m.Source,
+			Source:       filename,
 			Path:         m.Destination,
-			ReadOnly:     m.ReadOnly,
+			ReadOnly:     readonly,
 			DockerVolume: false,
 		}
 
 		fsmap = append(fsmap, fsmapDesc)
 	}
 
-	return fsmap
+	return fsmap, nil
+}
+
+func (h *hyper) bindUnmountContainerMounts(mounts []Mount) error {
+	if mounts == nil {
+		return nil
+	}
+
+	for _, m := range mounts {
+		if !isSystemMount(m.Destination) && m.Type == "bind" {
+			err := syscall.Unmount(m.HostPath, 0)
+
+			if err != nil {
+				h.Logger().WithFields(logrus.Fields{
+					"host-path": m.HostPath,
+					"error":     err,
+				}).Warn("Could not umount")
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (h *hyper) bindUnmountContainerRootfs(podID, cID string) error {
+	rootfsDest := filepath.Join(defaultSharedDir, podID, cID, rootfsDir)
+	syscall.Unmount(rootfsDest, 0)
+
+	return nil
+}
+
+func (h *hyper) bindUnmountAllRootfs(pod Pod) {
+	for _, c := range pod.containers {
+		h.bindUnmountContainerMounts(c.mounts)
+		if c.state.Fstype == "" {
+			// Need to check for error returned by this call.
+			// See: https://github.com/containers/virtcontainers/issues/295
+			h.bindUnmountContainerRootfs(pod.id, c.id)
+		}
+	}
 }
 
 // init is the agent initialization implementation for hyperstart.
@@ -400,8 +483,8 @@ func (h *hyper) startOneContainer(pod Pod, c Container) error {
 		container.Image = driveName
 	} else {
 
-		if err := bindMountContainerRootfs(defaultSharedDir, pod.id, c.id, c.rootFs, false); err != nil {
-			bindUnmountAllRootfs(defaultSharedDir, pod)
+		if err := h.bindMountContainerRootfs(pod.id, c.id, c.rootFs, false); err != nil {
+			h.bindUnmountAllRootfs(pod)
 			return err
 		}
 	}
@@ -409,13 +492,11 @@ func (h *hyper) startOneContainer(pod Pod, c Container) error {
 	//TODO : Enter mount namespace
 
 	// Handle container mounts
-	newMounts, err := bindMountContainerMounts(defaultSharedDir, pod.id, c.id, c.mounts)
+	fsmap, err := h.bindMountContainerMounts(pod.id, c.id, c.mounts)
 	if err != nil {
-		bindUnmountAllRootfs(defaultSharedDir, pod)
+		h.bindUnmountAllRootfs(pod)
 		return err
 	}
-
-	fsmap := fsMapFromMounts(newMounts)
 
 	// Append container mounts for block devices passed with --device.
 	for _, device := range c.devices {
@@ -477,12 +558,12 @@ func (h *hyper) stopOneContainer(podID string, c Container) error {
 		return err
 	}
 
-	if err := bindUnmountContainerMounts(c.mounts); err != nil {
+	if err := h.bindUnmountContainerMounts(c.mounts); err != nil {
 		return err
 	}
 
 	if c.state.Fstype == "" {
-		if err := bindUnmountContainerRootfs(defaultSharedDir, podID, c.id); err != nil {
+		if err := h.bindUnmountContainerRootfs(podID, c.id); err != nil {
 			return err
 		}
 	}

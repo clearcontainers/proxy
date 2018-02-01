@@ -376,7 +376,7 @@ func TestStartPodHyperstartAgentSuccessful(t *testing.T) {
 	pImpl, ok := p.(*Pod)
 	assert.True(t, ok)
 
-	bindUnmountAllRootfs(defaultSharedDir, *pImpl)
+	pImpl.agent.(*hyper).bindUnmountAllRootfs(*pImpl)
 }
 
 func TestStartPodFailing(t *testing.T) {
@@ -544,7 +544,7 @@ func TestRunPodHyperstartAgentSuccessful(t *testing.T) {
 	pImpl, ok := p.(*Pod)
 	assert.True(t, ok)
 
-	bindUnmountAllRootfs(defaultSharedDir, *pImpl)
+	pImpl.agent.(*hyper).bindUnmountAllRootfs(*pImpl)
 }
 
 func TestRunPodFailing(t *testing.T) {
@@ -1075,7 +1075,7 @@ func TestStartStopContainerHyperstartAgentSuccessful(t *testing.T) {
 	pImpl, ok := p.(*Pod)
 	assert.True(t, ok)
 
-	bindUnmountAllRootfs(defaultSharedDir, *pImpl)
+	pImpl.agent.(*hyper).bindUnmountAllRootfs(*pImpl)
 }
 
 func TestStartStopPodHyperstartAgentSuccessfulWithCNINetwork(t *testing.T) {
@@ -1296,7 +1296,7 @@ func TestEnterContainerHyperstartAgentSuccessful(t *testing.T) {
 	pImpl, ok := p.(*Pod)
 	assert.True(t, ok)
 
-	bindUnmountAllRootfs(defaultSharedDir, *pImpl)
+	pImpl.agent.(*hyper).bindUnmountAllRootfs(*pImpl)
 }
 
 func TestEnterContainerFailingNoPod(t *testing.T) {

@@ -38,6 +38,10 @@ func TestSetNoopAgentType(t *testing.T) {
 	testSetAgentType(t, "noop", NoopAgentType)
 }
 
+func TestSetSSHdAgentType(t *testing.T) {
+	testSetAgentType(t, "sshd", SSHdAgent)
+}
+
 func TestSetHyperstartAgentType(t *testing.T) {
 	testSetAgentType(t, "hyperstart", HyperstartAgent)
 }
@@ -51,6 +55,7 @@ func TestSetUnknownAgentType(t *testing.T) {
 	}
 
 	if agentType == NoopAgentType ||
+		agentType == SSHdAgent ||
 		agentType == HyperstartAgent {
 		t.Fatal()
 	}
@@ -65,6 +70,10 @@ func testStringFromAgentType(t *testing.T, agentType AgentType, expected string)
 
 func TestStringFromNoopAgentType(t *testing.T) {
 	testStringFromAgentType(t, NoopAgentType, "noop")
+}
+
+func TestStringFromSSHdAgentType(t *testing.T) {
+	testStringFromAgentType(t, SSHdAgent, "sshd")
 }
 
 func TestStringFromHyperstartAgentType(t *testing.T) {
@@ -88,6 +97,10 @@ func TestNewAgentFromNoopAgentType(t *testing.T) {
 	testNewAgentFromAgentType(t, NoopAgentType, &noopAgent{})
 }
 
+func TestNewAgentFromSSHdAgentType(t *testing.T) {
+	testNewAgentFromAgentType(t, SSHdAgent, &sshd{})
+}
+
 func TestNewAgentFromHyperstartAgentType(t *testing.T) {
 	testNewAgentFromAgentType(t, HyperstartAgent, &hyper{})
 }
@@ -109,6 +122,17 @@ func TestNewAgentConfigFromNoopAgentType(t *testing.T) {
 
 	podConfig := PodConfig{
 		AgentType:   NoopAgentType,
+		AgentConfig: agentConfig,
+	}
+
+	testNewAgentConfig(t, podConfig, agentConfig)
+}
+
+func TestNewAgentConfigFromSSHdAgentType(t *testing.T) {
+	agentConfig := SshdConfig{}
+
+	podConfig := PodConfig{
+		AgentType:   SSHdAgent,
 		AgentConfig: agentConfig,
 	}
 

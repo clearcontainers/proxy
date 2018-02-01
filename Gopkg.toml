@@ -23,7 +23,7 @@
 
 [[constraint]]
   name = "github.com/containers/virtcontainers"
-  revision = "3a6bd62b25e130dc142ba430cf3b45c975d1878e"
+  revision = "d2342c73a2b486736b2f88164b13b542873115dc"
 
 [[constraint]]
   name = "github.com/sirupsen/logrus"

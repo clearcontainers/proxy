@@ -58,7 +58,7 @@ func testQemuBuildKernelParams(t *testing.T, kernelParams []Param, expected stri
 	}
 }
 
-var testQemuKernelParamsBase = "root=/dev/pmem0p1 rootflags=dax,data=ordered,errors=remount-ro rw rootfstype=ext4 tsc=reliable no_timer_check rcupdate.rcu_expedited=1 i8042.direct=1 i8042.dumbkbd=1 i8042.nopnp=1 i8042.noaux=1 noreplace-smp reboot=k panic=1 console=hvc0 console=hvc1 initcall_debug iommu=off cryptomgr.notests net.ifnames=0 pci=lastbus=0"
+var testQemuKernelParamsBase = "root=/dev/pmem0p1 rootflags=dax,data=ordered,errors=remount-ro rw rootfstype=ext4 tsc=reliable no_timer_check rcupdate.rcu_expedited=1 i8042.direct=1 i8042.dumbkbd=1 i8042.nopnp=1 i8042.noaux=1 noreplace-smp reboot=k panic=1 console=hvc0 console=hvc1 initcall_debug iommu=off cryptomgr.notests net.ifnames=0"
 var testQemuKernelParamsNonDebug = "quiet systemd.show_status=false"
 var testQemuKernelParamsDebug = "debug systemd.show_status=true systemd.log_level=debug"
 
@@ -121,12 +121,10 @@ func testQemuAppend(t *testing.T, structure interface{}, expected []govmmQemu.De
 		devices = q.appendBlockDevice(devices, s)
 	case VFIODevice:
 		devices = q.appendVFIODevice(devices, s)
-	case VhostUserNetDevice:
-		devices = q.appendVhostUserDevice(devices, &s)
 	}
 
 	if reflect.DeepEqual(devices, expected) == false {
-		t.Fatalf("\n\tGot %v\n\tExpecting %v", devices, expected)
+		t.Fatalf("Got %v\nExpecting %v", devices, expected)
 	}
 }
 
@@ -225,31 +223,6 @@ func TestQemuAppendVFIODevice(t *testing.T) {
 	}
 
 	testQemuAppend(t, vfDevice, expectedOut, -1, nestedVM)
-}
-
-func TestQemuAppendVhostUserDevice(t *testing.T) {
-	nestedVM := true
-	socketPath := "nonexistentpath.sock"
-	macAddress := "00:11:22:33:44:55:66"
-	id := "deadbeef"
-
-	expectedOut := []govmmQemu.Device{
-		govmmQemu.VhostUserDevice{
-			SocketPath:    socketPath,
-			CharDevID:     fmt.Sprintf("char-%s", id),
-			TypeDevID:     fmt.Sprintf("net-%s", id),
-			Address:       macAddress,
-			VhostUserType: VhostUserNet,
-		},
-	}
-
-	vhostUserDevice := VhostUserNetDevice{
-		MacAddress: macAddress,
-	}
-	vhostUserDevice.ID = id
-	vhostUserDevice.SocketPath = socketPath
-
-	testQemuAppend(t, vhostUserDevice, expectedOut, -1, nestedVM)
 }
 
 func TestQemuAppendFSDevices(t *testing.T) {

@@ -62,7 +62,6 @@ const (
 // State is a pod state structure.
 type State struct {
 	State stateString `json:"state"`
-	URL   string      `json:"url,omitempty"`
 
 	// Index of the block device passed to hypervisor.
 	BlockIndex int `json:"blockIndex"`
@@ -72,9 +71,6 @@ type State struct {
 
 	// Bool to indicate if the drive for a container was hotplugged.
 	HotpluggedDrive bool `json:"hotpluggedDrive"`
-
-	// Process ID of the pods proxy instance
-	ProxyPid int
 }
 
 // valid checks that the pod state is valid.
@@ -249,6 +245,9 @@ type Drive struct {
 
 	// ID is used to identify this drive in the hypervisor options.
 	ID string
+
+	// Index assigned to the drive. In case of virtio-scsi, this is used as SCSI LUN index
+	Index int
 }
 
 // EnvVar is a key/value structure representing a command
@@ -454,8 +453,6 @@ type Pod struct {
 
 	hypervisor hypervisor
 	agent      agent
-	proxy      proxy
-	shim       shim
 	storage    resourceStorage
 	network    network
 
@@ -469,6 +466,8 @@ type Pod struct {
 	configPath string
 
 	state State
+
+	networkNS NetworkNamespace
 
 	lockFile *os.File
 
@@ -525,11 +524,6 @@ func (p *Pod) GetAnnotations() map[string]string {
 	return p.config.Annotations
 }
 
-// URL returns the pod URL for any runtime to connect to the proxy.
-func (p *Pod) URL() string {
-	return p.state.URL
-}
-
 // GetAllContainers returns all containers.
 func (p *Pod) GetAllContainers() []VCContainer {
 	ifa := make([]VCContainer, len(p.containers))
@@ -548,22 +542,6 @@ func (p *Pod) GetContainer(containerID string) VCContainer {
 			return c
 		}
 	}
-	return nil
-}
-
-func (p *Pod) createSetStates() error {
-	p.state.State = StateReady
-
-	err := p.setPodState(p.state)
-	if err != nil {
-		return err
-	}
-
-	err = p.setContainersState(p.state.State)
-	if err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -597,11 +575,21 @@ func createPod(podConfig PodConfig) (*Pod, error) {
 		return nil, err
 	}
 
-	p, err := doFetchPod(podConfig)
+	p, err := newPod(podConfig)
 	if err != nil {
 		return nil, err
 	}
 
+	// Fetch pod network to be able to access it from the pod structure.
+	networkNS, err := p.storage.fetchPodNetwork(p.id)
+	if err == nil {
+		p.networkNS = networkNS
+	}
+
+	// We first try to fetch the pod state from storage.
+	// If it exists, this means this is a re-creation, i.e.
+	// we don't need to talk to the guest's agent, but only
+	// want to create the pod and its containers in memory.
 	state, err := p.storage.fetchPodState(p.id)
 	if err == nil && state.State != "" {
 		p.state = state
@@ -618,15 +606,15 @@ func createPod(podConfig PodConfig) (*Pod, error) {
 		return nil, err
 	}
 
-	if err := p.createSetStates(); err != nil {
-		p.storage.deletePodResources(p.id, nil)
+	// Set pod state
+	if err := p.setPodState(StateReady); err != nil {
 		return nil, err
 	}
 
 	return p, nil
 }
 
-func doFetchPod(podConfig PodConfig) (*Pod, error) {
+func newPod(podConfig PodConfig) (*Pod, error) {
 	if podConfig.valid() == false {
 		return nil, fmt.Errorf("Invalid pod configuration")
 	}
@@ -638,24 +626,12 @@ func doFetchPod(podConfig PodConfig) (*Pod, error) {
 		return nil, err
 	}
 
-	proxy, err := newProxy(podConfig.ProxyType)
-	if err != nil {
-		return nil, err
-	}
-
-	shim, err := newShim(podConfig.ShimType)
-	if err != nil {
-		return nil, err
-	}
-
 	network := newNetwork(podConfig.NetworkModel)
 
 	p := &Pod{
 		id:              podConfig.ID,
 		hypervisor:      hypervisor,
 		agent:           agent,
-		proxy:           proxy,
-		shim:            shim,
 		storage:         &filesystem{},
 		network:         network,
 		config:          &podConfig,
@@ -666,13 +642,6 @@ func doFetchPod(podConfig PodConfig) (*Pod, error) {
 		annotationsLock: &sync.RWMutex{},
 		wg:              &sync.WaitGroup{},
 	}
-
-	containers, err := newContainers(p, podConfig.Containers)
-	if err != nil {
-		return nil, err
-	}
-
-	p.containers = containers
 
 	if err := p.storage.createAllResources(*p); err != nil {
 		return nil, err
@@ -731,141 +700,168 @@ func fetchPod(podID string) (pod *Pod, err error) {
 		return nil, fmt.Errorf("failed to create pod with config %+v: %v", config, err)
 	}
 
+	// This pod already exists, we don't need to recreate the containers in the guest.
+	// We only need to fetch the containers from storage and create the container structs.
+	if err := pod.newContainers(); err != nil {
+		return nil, err
+	}
+
 	return pod, nil
+}
+
+// findContainer returns a container from the containers list held by the
+// pod structure, based on a container ID.
+func (p *Pod) findContainer(containerID string) (*Container, error) {
+	if p == nil {
+		return nil, errNeedPod
+	}
+
+	if containerID == "" {
+		return nil, errNeedContainerID
+	}
+
+	for _, c := range p.containers {
+		if containerID == c.id {
+			return c, nil
+		}
+	}
+
+	return nil, fmt.Errorf("Could not find the container %q from the pod %q containers list",
+		containerID, p.id)
+}
+
+// removeContainer removes a container from the containers list held by the
+// pod structure, based on a container ID.
+func (p *Pod) removeContainer(containerID string) error {
+	if p == nil {
+		return errNeedPod
+	}
+
+	if containerID == "" {
+		return errNeedContainerID
+	}
+
+	for idx, c := range p.containers {
+		if containerID == c.id {
+			p.containers = append(p.containers[:idx], p.containers[idx+1:]...)
+			return nil
+		}
+	}
+
+	return fmt.Errorf("Could not remove the container %q from the pod %q containers list",
+		containerID, p.id)
 }
 
 // delete deletes an already created pod.
 // The VM in which the pod is running will be shut down.
 func (p *Pod) delete() error {
-	state, err := p.storage.fetchPodState(p.id)
-	if err != nil {
-		return err
-	}
-
-	if state.State != StateReady && state.State != StatePaused && state.State != StateStopped {
+	if p.state.State != StateReady &&
+		p.state.State != StatePaused &&
+		p.state.State != StateStopped {
 		return fmt.Errorf("Pod not ready, paused or stopped, impossible to delete")
 	}
 
-	err = p.storage.deletePodResources(p.id, nil)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (p *Pod) startCheckStates() error {
-	state, err := p.storage.fetchPodState(p.id)
-	if err != nil {
-		return err
-	}
-
-	err = state.validTransition(StateReady, StateRunning)
-	if err != nil {
-		err = state.validTransition(StateStopped, StateRunning)
-		if err != nil {
+	for _, c := range p.containers {
+		if err := c.delete(); err != nil {
 			return err
 		}
 	}
 
-	err = p.checkContainersState(StateReady)
-	if err != nil {
-		err = p.checkContainersState(StateStopped)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return p.storage.deletePodResources(p.id, nil)
 }
 
-func (p *Pod) startSetState() error {
-	p.state.State = StateRunning
-
-	err := p.setPodState(p.state)
+func (p *Pod) createNetwork() error {
+	// Initialize the network.
+	netNsPath, netNsCreated, err := p.network.init(p.config.NetworkConfig)
 	if err != nil {
 		return err
+	}
+
+	// Execute prestart hooks inside netns
+	if err := p.network.run(netNsPath, func() error {
+		return p.config.Hooks.preStartHooks()
+	}); err != nil {
+		return err
+	}
+
+	// Add the network
+	networkNS, err := p.network.add(*p, p.config.NetworkConfig, netNsPath, netNsCreated)
+	if err != nil {
+		return err
+	}
+	p.networkNS = networkNS
+
+	// Store the network
+	return p.storage.storePodNetwork(p.id, networkNS)
+}
+
+func (p *Pod) removeNetwork() error {
+	if p.networkNS.NetNsCreated {
+		return p.network.remove(*p, p.networkNS)
 	}
 
 	return nil
 }
 
 // startVM starts the VM.
-func (p *Pod) startVM(netNsPath string) error {
+func (p *Pod) startVM() error {
 	p.Logger().Info("Starting VM")
 
-	return p.network.run(netNsPath, func() error {
+	if err := p.network.run(p.networkNS.NetNsPath, func() error {
 		return p.hypervisor.startPod()
-	})
+	}); err != nil {
+		return err
+	}
+
+	if err := p.hypervisor.waitPod(vmStartTimeout); err != nil {
+		return err
+	}
+
+	p.Logger().Info("VM started")
+
+	// Once startVM is done, we want to guarantee
+	// that the pod is manageable. For that we need
+	// to start the pod inside the VM.
+	return p.agent.startPod(*p)
 }
 
-// startProxy starts a proxy instance for the pod.
-//
-// Note that there is no corresponding stopProxy() since the proxy
-// stops itself.
-func (p *Pod) startProxy() error {
-	pid, uri, err := p.proxy.start(*p)
-	if err != nil {
-		return err
-	}
-
-	// save state
-	p.state.URL = uri
-	p.state.ProxyPid = pid
-
-	if err := p.setPodState(p.state); err != nil {
-		return err
-	}
-
-	p.Logger().WithField("proxy-pid", pid).Info("proxy started")
+func (p *Pod) addContainer(c *Container) error {
+	p.containers = append(p.containers, c)
 
 	return nil
 }
 
-// startShims registers all containers to the proxy and starts one
-// shim per container.
-func (p *Pod) startShims() error {
-	proxyInfos, url, err := p.proxy.register(*p)
-	if err != nil {
-		return err
-	}
-
-	if err := p.proxy.disconnect(); err != nil {
-		return err
-	}
-
-	if len(proxyInfos) != len(p.containers) {
-		return fmt.Errorf("Retrieved %d proxy infos, expecting %d", len(proxyInfos), len(p.containers))
-	}
-
-	shimCount := 0
-	for idx := range p.containers {
-		p.containers[idx].process = newInitProcess(proxyInfos[idx].Token, p.containers[idx].id)
-
-		shimParams := ShimParams{
-			Container: p.containers[idx].id,
-			Token:     p.containers[idx].process.Token,
-			URL:       url,
-			Console:   p.containers[idx].config.Cmd.Console,
-			Detach:    p.containers[idx].config.Cmd.Detach,
-		}
-
-		pid, err := p.shim.start(*p, shimParams)
+// newContainers creates new containers structure and
+// adds them to the pod. It does not create the containers
+// in the guest. This should only be used when fetching a
+// pod that already exists.
+func (p *Pod) newContainers() error {
+	for _, contConfig := range p.config.Containers {
+		c, err := newContainer(p, contConfig)
 		if err != nil {
 			return err
 		}
 
-		shimCount++
-
-		if err := p.containers[idx].SetPid(pid); err != nil {
+		if err := p.addContainer(c); err != nil {
 			return err
 		}
 	}
 
-	if shimCount > 0 {
-		p.Logger().WithField("shim-count", shimCount).Info("Started shims")
-	} else {
-		p.Logger().Info("No containers, so no shims started")
+	return nil
+}
+
+// createContainers registers all containers to the proxy, create the
+// containers in the guest and starts one shim per container.
+func (p *Pod) createContainers() error {
+	for _, contConfig := range p.config.Containers {
+		newContainer, err := createContainer(p, contConfig)
+		if err != nil {
+			return err
+		}
+
+		if err := p.addContainer(newContainer); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -874,29 +870,11 @@ func (p *Pod) startShims() error {
 // start starts a pod. The containers that are making the pod
 // will be started.
 func (p *Pod) start() error {
-	if err := p.startCheckStates(); err != nil {
+	if err := p.state.validTransition(p.state.State, StateRunning); err != nil {
 		return err
 	}
 
-	l := p.Logger()
-
-	if err := p.hypervisor.waitPod(vmStartTimeout); err != nil {
-		return err
-	}
-
-	l.Info("VM started")
-
-	if _, _, err := p.proxy.connect(*p, false); err != nil {
-		return err
-	}
-	defer p.proxy.disconnect()
-
-	if err := p.agent.startPod(*p); err != nil {
-		return err
-	}
-
-	// Pod is started
-	if err := p.startSetState(); err != nil {
+	if err := p.setPodState(StateRunning); err != nil {
 		return err
 	}
 
@@ -906,135 +884,34 @@ func (p *Pod) start() error {
 		}
 	}
 
-	l.Info("started")
+	p.Logger().Info("Pod is started")
 
 	return nil
-}
-
-func (p *Pod) stopSetStates() error {
-	p.state.State = StateStopped
-
-	err := p.setContainersState(p.state.State)
-	if err != nil {
-		return err
-	}
-
-	err = p.setPodState(p.state)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// stopShims stops all remaining shims corresponfing to not started/stopped
-// containers.
-func (p *Pod) stopShims() error {
-	shimCount := 0
-
-	for _, c := range p.containers {
-		if err := stopShim(c.process.Pid); err != nil {
-			return err
-		}
-
-		shimCount++
-	}
-
-	p.Logger().WithField("shim-count", shimCount).Info("Stopped shims")
-
-	return nil
-}
-
-func (p *Pod) pauseSetStates() error {
-	// XXX: When a pod is paused, all its containers are forcibly
-	// paused too.
-	p.state.State = StatePaused
-
-	err := p.setContainersState(p.state.State)
-	if err != nil {
-		return err
-	}
-
-	err = p.setPodState(p.state)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (p *Pod) resumeSetStates() error {
-	// XXX: Resuming a paused pod puts all containers back into the
-	// running state.
-	p.state.State = StateRunning
-
-	err := p.setContainersState(p.state.State)
-	if err != nil {
-		return err
-	}
-
-	err = p.setPodState(p.state)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// stopVM stops the agent inside the VM and shut down the VM itself.
-func (p *Pod) stopVM() error {
-	p.Logger().Info("Stopping VM")
-
-	if _, _, err := p.proxy.connect(*p, false); err != nil {
-		return err
-	}
-
-	if err := p.proxy.unregister(*p); err != nil {
-		return err
-	}
-
-	if err := p.proxy.disconnect(); err != nil {
-		return err
-	}
-
-	return p.hypervisor.stopPod()
 }
 
 // stop stops a pod. The containers that are making the pod
 // will be destroyed.
 func (p *Pod) stop() error {
-	state, err := p.storage.fetchPodState(p.id)
-	if err != nil {
+	if err := p.state.validTransition(p.state.State, StateStopped); err != nil {
 		return err
-	}
-
-	if err := state.validTransition(state.State, StateStopped); err != nil {
-		return err
-	}
-
-	// This handles the special case of stopping a pod in ready state.
-	if state.State == StateReady {
-		return p.stopSetStates()
 	}
 
 	for _, c := range p.containers {
-		if c.state.State == StateRunning || c.state.State == StatePaused {
-			if err := c.stop(); err != nil {
-				return err
-			}
+		if err := c.stop(); err != nil {
+			return err
 		}
 	}
-
-	if _, _, err := p.proxy.connect(*p, false); err != nil {
-		return err
-	}
-	defer p.proxy.disconnect()
 
 	if err := p.agent.stopPod(*p); err != nil {
 		return err
 	}
 
-	return p.stopSetStates()
+	p.Logger().Info("Stopping VM")
+	if err := p.hypervisor.stopPod(); err != nil {
+		return err
+	}
+
+	return p.setPodState(StateStopped)
 }
 
 func (p *Pod) pause() error {
@@ -1065,17 +942,36 @@ func (p *Pod) enter(args []string) error {
 
 // setPodState sets both the in-memory and on-disk state of the
 // pod.
-func (p *Pod) setPodState(state State) error {
+func (p *Pod) setPodState(state stateString) error {
+	if state == "" {
+		return errNeedState
+	}
+
 	// update in-memory state
-	p.state = state
+	p.state.State = state
 
 	// update on-disk state
-	err := p.storage.storePodResource(p.id, stateFileType, state)
-	if err != nil {
+	return p.storage.storePodResource(p.id, stateFileType, p.state)
+}
+
+func (p *Pod) pauseSetStates() error {
+	// XXX: When a pod is paused, all its containers are forcibly
+	// paused too.
+	if err := p.setContainersState(StatePaused); err != nil {
 		return err
 	}
 
-	return nil
+	return p.setPodState(StatePaused)
+}
+
+func (p *Pod) resumeSetStates() error {
+	// XXX: Resuming a paused pod puts all containers back into the
+	// running state.
+	if err := p.setContainersState(StateRunning); err != nil {
+		return err
+	}
+
+	return p.setPodState(StateRunning)
 }
 
 // getAndSetPodBlockIndex retrieves pod block index and increments it for
@@ -1110,43 +1006,13 @@ func (p *Pod) decrementPodBlockIndex() error {
 	return nil
 }
 
-func (p *Pod) getContainer(containerID string) (*Container, error) {
-	if containerID == "" {
-		return &Container{}, errNeedContainerID
-	}
-
-	for _, c := range p.containers {
-		if c.id == containerID {
-			return c, nil
-		}
-	}
-
-	return nil, fmt.Errorf("pod %v has no container with ID %v", p.ID(), containerID)
-}
-
-func (p *Pod) setContainerState(containerID string, state stateString) error {
-	if containerID == "" {
-		return errNeedContainerID
-	}
-
-	c := p.GetContainer(containerID)
-	if c == nil {
-		return fmt.Errorf("Pod %s has no container %s", p.id, containerID)
-	}
-
-	// Let container handle its state update
-	cImpl := c.(*Container)
-	return cImpl.setContainerState(state)
-}
-
 func (p *Pod) setContainersState(state stateString) error {
 	if state == "" {
 		return errNeedState
 	}
 
-	for _, container := range p.config.Containers {
-		err := p.setContainerState(container.ID, state)
-		if err != nil {
+	for _, c := range p.containers {
+		if err := c.setContainerState(state); err != nil {
 			return err
 		}
 	}
@@ -1170,42 +1036,6 @@ func (p *Pod) deleteContainerState(containerID string) error {
 func (p *Pod) deleteContainersState() error {
 	for _, container := range p.config.Containers {
 		err := p.deleteContainerState(container.ID)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (p *Pod) checkContainerState(containerID string, expectedState stateString) error {
-	if containerID == "" {
-		return errNeedContainerID
-	}
-
-	if expectedState == "" {
-		return fmt.Errorf("expectedState cannot be empty")
-	}
-
-	state, err := p.storage.fetchContainerState(p.id, containerID)
-	if err != nil {
-		return err
-	}
-
-	if state.State != expectedState {
-		return fmt.Errorf("Container %s not %s", containerID, expectedState)
-	}
-
-	return nil
-}
-
-func (p *Pod) checkContainersState(state stateString) error {
-	if state == "" {
-		return errNeedState
-	}
-
-	for _, container := range p.config.Containers {
-		err := p.checkContainerState(container.ID, state)
 		if err != nil {
 			return err
 		}

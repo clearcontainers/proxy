@@ -42,6 +42,10 @@ func TestSetHyperstartAgentType(t *testing.T) {
 	testSetAgentType(t, "hyperstart", HyperstartAgent)
 }
 
+func TestSetKataAgentType(t *testing.T) {
+	testSetAgentType(t, "kata", KataContainersAgent)
+}
+
 func TestSetUnknownAgentType(t *testing.T) {
 	var agentType AgentType
 
@@ -71,6 +75,10 @@ func TestStringFromHyperstartAgentType(t *testing.T) {
 	testStringFromAgentType(t, HyperstartAgent, "hyperstart")
 }
 
+func TestStringFromKataAgentType(t *testing.T) {
+	testStringFromAgentType(t, KataContainersAgent, "kata")
+}
+
 func TestStringFromUnknownAgentType(t *testing.T) {
 	var agentType AgentType
 	testStringFromAgentType(t, agentType, "")
@@ -90,6 +98,10 @@ func TestNewAgentFromNoopAgentType(t *testing.T) {
 
 func TestNewAgentFromHyperstartAgentType(t *testing.T) {
 	testNewAgentFromAgentType(t, HyperstartAgent, &hyper{})
+}
+
+func TestNewAgentFromKataAgentType(t *testing.T) {
+	testNewAgentFromAgentType(t, KataContainersAgent, &kataAgent{})
 }
 
 func TestNewAgentFromUnknownAgentType(t *testing.T) {
@@ -120,6 +132,17 @@ func TestNewAgentConfigFromHyperstartAgentType(t *testing.T) {
 
 	podConfig := PodConfig{
 		AgentType:   HyperstartAgent,
+		AgentConfig: agentConfig,
+	}
+
+	testNewAgentConfig(t, podConfig, agentConfig)
+}
+
+func TestNewAgentConfigFromKataAgentType(t *testing.T) {
+	agentConfig := KataAgentConfig{}
+
+	podConfig := PodConfig{
+		AgentType:   KataContainersAgent,
 		AgentConfig: agentConfig,
 	}
 

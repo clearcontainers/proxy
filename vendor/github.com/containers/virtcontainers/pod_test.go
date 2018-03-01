@@ -62,6 +62,14 @@ func testCreatePod(t *testing.T, id string,
 		return nil, fmt.Errorf("Could not create pod: %s", err)
 	}
 
+	if err := pod.agent.startPod(*pod); err != nil {
+		return nil, err
+	}
+
+	if err := pod.createContainers(); err != nil {
+		return nil, err
+	}
+
 	if pod.id == "" {
 		return pod, fmt.Errorf("Invalid empty pod ID")
 	}
@@ -466,16 +474,8 @@ func testCheckInitPodAndContainerStates(p *Pod, initialPodState State, c *Contai
 		return fmt.Errorf("Expected pod state %v, got %v", initialPodState.State, p.state.State)
 	}
 
-	if p.state.URL != initialPodState.URL {
-		return fmt.Errorf("Expected pod state URL %v, got %v", initialPodState.URL, p.state.URL)
-	}
-
 	if c.state.State != initialContainerState.State {
 		return fmt.Errorf("Expected container state %v, got %v", initialContainerState.State, c.state.State)
-	}
-
-	if c.state.URL != initialContainerState.URL {
-		return fmt.Errorf("Expected container state URL %v, got %v", initialContainerState.URL, c.state.URL)
 	}
 
 	return nil
@@ -483,7 +483,7 @@ func testCheckInitPodAndContainerStates(p *Pod, initialPodState State, c *Contai
 
 func testForcePodStateChangeAndCheck(t *testing.T, p *Pod, newPodState State) error {
 	// force pod state change
-	if err := p.setPodState(newPodState); err != nil {
+	if err := p.setPodState(newPodState.State); err != nil {
 		t.Fatalf("Unexpected error: %v (pod %+v)", err, p)
 	}
 
@@ -492,26 +492,18 @@ func testForcePodStateChangeAndCheck(t *testing.T, p *Pod, newPodState State) er
 		return fmt.Errorf("Expected state %v, got %v", newPodState.State, p.state.State)
 	}
 
-	if p.state.URL != newPodState.URL {
-		return fmt.Errorf("Expected state URL %v, got %v", newPodState.URL, p.state.URL)
-	}
-
 	return nil
 }
 
 func testForceContainerStateChangeAndCheck(t *testing.T, p *Pod, c *Container, newContainerState State) error {
 	// force container state change
-	if err := p.setContainerState(c.id, newContainerState.State); err != nil {
+	if err := c.setContainerState(newContainerState.State); err != nil {
 		t.Fatalf("Unexpected error: %v (pod %+v)", err, p)
 	}
 
 	// check the in-memory state is correct
 	if c.state.State != newContainerState.State {
 		return fmt.Errorf("Expected state %v, got %v", newContainerState.State, c.state.State)
-	}
-
-	if c.state.URL != newContainerState.URL {
-		return fmt.Errorf("Expected state URL %v, got %v", newContainerState.URL, c.state.URL)
 	}
 
 	return nil
@@ -523,10 +515,6 @@ func testCheckPodOnDiskState(p *Pod, podState State) error {
 		return fmt.Errorf("Expected state %v, got %v", podState.State, p.state.State)
 	}
 
-	if p.state.URL != podState.URL {
-		return fmt.Errorf("Expected state URL %v, got %v", podState.URL, p.state.URL)
-	}
-
 	return nil
 }
 
@@ -534,10 +522,6 @@ func testCheckContainerOnDiskState(c *Container, containerState State) error {
 	// check on-disk state is correct
 	if c.state.State != containerState.State {
 		return fmt.Errorf("Expected state %v, got %v", containerState.State, c.state.State)
-	}
-
-	if c.state.URL != containerState.URL {
-		return fmt.Errorf("Expected state URL %v, got %v", containerState.URL, c.state.URL)
 	}
 
 	return nil
@@ -561,16 +545,14 @@ func TestPodSetPodAndContainerState(t *testing.T) {
 
 	initialPodState := State{
 		State: StateReady,
-		URL:   "",
 	}
 
-	// initially, a container has an empty state
+	// After a pod creation, a container has a READY state
 	initialContainerState := State{
-		State: "",
-		URL:   "",
+		State: StateReady,
 	}
 
-	c, err := p.getContainer(contID)
+	c, err := p.findContainer(contID)
 	if err != nil {
 		t.Fatalf("Failed to retrieve container %v: %v", contID, err)
 	}
@@ -588,7 +570,6 @@ func TestPodSetPodAndContainerState(t *testing.T) {
 
 	newPodState := State{
 		State: StateRunning,
-		URL:   "http://pod/url",
 	}
 
 	if err := testForcePodStateChangeAndCheck(t, p, newPodState); err != nil {
@@ -597,7 +578,6 @@ func TestPodSetPodAndContainerState(t *testing.T) {
 
 	newContainerState := State{
 		State: StateStopped,
-		URL:   "",
 	}
 
 	if err := testForceContainerStateChangeAndCheck(t, p, c, newContainerState); err != nil {
@@ -614,7 +594,7 @@ func TestPodSetPodAndContainerState(t *testing.T) {
 		t.Error(err)
 	}
 
-	c2, err := p2.getContainer(contID)
+	c2, err := p2.findContainer(contID)
 	if err != nil {
 		t.Fatalf("Failed to find container %v: %v", contID, err)
 	}
@@ -624,7 +604,7 @@ func TestPodSetPodAndContainerState(t *testing.T) {
 	}
 
 	// revert pod state to allow it to be deleted
-	err = p.setPodState(initialPodState)
+	err = p.setPodState(initialPodState.State)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v (pod %+v)", err, p)
 	}
@@ -642,41 +622,25 @@ func TestPodSetPodStateFailingStorePodResource(t *testing.T) {
 		storage: fs,
 	}
 
-	pod.state.State = StateReady
-	err := pod.setPodState(pod.state)
-	if err == nil {
-		t.Fatal()
-	}
-}
-
-func TestPodSetContainerStateFailingStoreContainerResource(t *testing.T) {
-	fs := &filesystem{}
-	pod := &Pod{
-		storage: fs,
-	}
-
-	err := pod.setContainerState("100", StateReady)
+	err := pod.setPodState(StateReady)
 	if err == nil {
 		t.Fatal()
 	}
 }
 
 func TestPodSetContainersStateFailingEmptyPodID(t *testing.T) {
-	containers := []ContainerConfig{
+	pod := &Pod{
+		storage: &filesystem{},
+	}
+
+	containers := []*Container{
 		{
-			ID: "100",
+			id:  "100",
+			pod: pod,
 		},
 	}
 
-	podConfig := &PodConfig{
-		Containers: containers,
-	}
-
-	fs := &filesystem{}
-	pod := &Pod{
-		config:  podConfig,
-		storage: fs,
-	}
+	pod.containers = containers
 
 	err := pod.setContainersState(StateReady)
 	if err == nil {
@@ -820,85 +784,6 @@ func TestPodDeleteContainersStateFailingEmptyPodID(t *testing.T) {
 	}
 }
 
-func TestPodCheckContainerStateFailingEmptyPodID(t *testing.T) {
-	contID := "100"
-	fs := &filesystem{}
-	pod := &Pod{
-		storage: fs,
-	}
-
-	err := pod.checkContainerState(contID, StateReady)
-	if err == nil {
-		t.Fatal()
-	}
-}
-
-func TestPodCheckContainerStateFailingNotExpectedState(t *testing.T) {
-	contID := "100"
-
-	fs := &filesystem{}
-	pod := &Pod{
-		id:      testPodID,
-		storage: fs,
-	}
-
-	path := filepath.Join(runStoragePath, testPodID, contID)
-	err := os.MkdirAll(path, dirMode)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	stateFilePath := filepath.Join(path, stateFile)
-
-	os.Remove(stateFilePath)
-
-	f, err := os.Create(stateFilePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	stateData := "{\"state\":\"ready\"}"
-	n, err := f.WriteString(stateData)
-	if err != nil || n != len(stateData) {
-		f.Close()
-		t.Fatal()
-	}
-	f.Close()
-
-	_, err = os.Stat(stateFilePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = pod.checkContainerState(contID, StateStopped)
-	if err == nil {
-		t.Fatal()
-	}
-}
-
-func TestPodCheckContainersStateFailingEmptyPodID(t *testing.T) {
-	containers := []ContainerConfig{
-		{
-			ID: "100",
-		},
-	}
-
-	podConfig := &PodConfig{
-		Containers: containers,
-	}
-
-	fs := &filesystem{}
-	pod := &Pod{
-		config:  podConfig,
-		storage: fs,
-	}
-
-	err := pod.checkContainersState(StateReady)
-	if err == nil {
-		t.Fatal()
-	}
-}
-
 func TestGetContainer(t *testing.T) {
 	containerIDs := []string{"abc", "123", "xyz", "rgb"}
 	containers := []*Container{}
@@ -996,12 +881,12 @@ func TestSetAnnotations(t *testing.T) {
 func TestPodGetContainer(t *testing.T) {
 
 	emptyPod := Pod{}
-	_, err := emptyPod.getContainer("")
+	_, err := emptyPod.findContainer("")
 	if err == nil {
 		t.Fatal("Expected error for containerless pod")
 	}
 
-	_, err = emptyPod.getContainer("foo")
+	_, err = emptyPod.findContainer("foo")
 	if err == nil {
 		t.Fatal("Expected error for containerless pod and invalid containerID")
 	}
@@ -1012,18 +897,20 @@ func TestPodGetContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p.state.URL = noopProxyURL
-
 	contID := "999"
 	contConfig := newTestContainerConfigNoop(contID)
-	_, err = createContainer(p, contConfig)
+	newContainer, err := createContainer(p, contConfig)
 	if err != nil {
 		t.Fatalf("Failed to create container %+v in pod %+v: %v", contConfig, p, err)
 	}
 
+	if err := p.addContainer(newContainer); err != nil {
+		t.Fatalf("Could not add container to pod %v", err)
+	}
+
 	got := false
 	for _, c := range p.GetAllContainers() {
-		c2, err := p.getContainer(c.ID())
+		c2, err := p.findContainer(c.ID())
 		if err != nil {
 			t.Fatalf("Failed to find container %v: %v", c.ID(), err)
 		}
@@ -1339,4 +1226,72 @@ func TestPodCreateAssets(t *testing.T) {
 
 	err = createAssets(p)
 	assert.NotNil(err)
+}
+
+func testFindContainerFailure(t *testing.T, pod *Pod, cid string) {
+	c, err := pod.findContainer(cid)
+	assert.Nil(t, c, "Container pointer should be nil")
+	assert.NotNil(t, err, "Should have returned an error")
+}
+
+func TestFindContainerPodNilFailure(t *testing.T) {
+	testFindContainerFailure(t, nil, testContainerID)
+}
+
+func TestFindContainerContainerIDEmptyFailure(t *testing.T) {
+	pod := &Pod{}
+	testFindContainerFailure(t, pod, "")
+}
+
+func TestFindContainerNoContainerMatchFailure(t *testing.T) {
+	pod := &Pod{}
+	testFindContainerFailure(t, pod, testContainerID)
+}
+
+func TestFindContainerSuccess(t *testing.T) {
+	pod := &Pod{
+		containers: []*Container{
+			{
+				id: testContainerID,
+			},
+		},
+	}
+	c, err := pod.findContainer(testContainerID)
+	assert.NotNil(t, c, "Container pointer should not be nil")
+	assert.Nil(t, err, "Should not have returned an error: %v", err)
+
+	assert.True(t, c == pod.containers[0], "Container pointers should point to the same address")
+}
+
+func testRemoveContainerFailure(t *testing.T, pod *Pod, cid string) {
+	err := pod.removeContainer(cid)
+	assert.NotNil(t, err, "Should have returned an error")
+}
+
+func TestRemoveContainerPodNilFailure(t *testing.T) {
+	testFindContainerFailure(t, nil, testContainerID)
+}
+
+func TestRemoveContainerContainerIDEmptyFailure(t *testing.T) {
+	pod := &Pod{}
+	testFindContainerFailure(t, pod, "")
+}
+
+func TestRemoveContainerNoContainerMatchFailure(t *testing.T) {
+	pod := &Pod{}
+	testFindContainerFailure(t, pod, testContainerID)
+}
+
+func TestRemoveContainerSuccess(t *testing.T) {
+	pod := &Pod{
+		containers: []*Container{
+			{
+				id: testContainerID,
+			},
+		},
+	}
+	err := pod.removeContainer(testContainerID)
+	assert.Nil(t, err, "Should not have returned an error: %v", err)
+
+	assert.Equal(t, len(pod.containers), 0, "Containers list from pod structure should be empty")
 }

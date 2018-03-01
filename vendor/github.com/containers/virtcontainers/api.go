@@ -32,7 +32,12 @@ var virtLog = logrus.FieldLogger(logrus.New())
 
 // SetLogger sets the logger for virtcontainers package.
 func SetLogger(logger logrus.FieldLogger) {
-	virtLog = logger.WithField("source", "virtcontainers")
+	fields := logrus.Fields{
+		"source": "virtcontainers",
+		"arch":   runtime.GOARCH,
+	}
+
+	virtLog = logger.WithFields(fields)
 }
 
 // CreatePod is the virtcontainers pod creation entry point.
@@ -48,52 +53,23 @@ func createPodFromConfig(podConfig PodConfig) (*Pod, error) {
 		return nil, err
 	}
 
-	// Store it.
-	err = p.storePod()
-	if err != nil {
-		return nil, err
-	}
-
-	// Initialize the network.
-	netNsPath, netNsCreated, err := p.network.init(p.config.NetworkConfig)
-	if err != nil {
-		return nil, err
-	}
-
-	// Execute prestart hooks inside netns
-	err = p.network.run(netNsPath, func() error {
-		return p.config.Hooks.preStartHooks()
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	// Add the network
-	networkNS, err := p.network.add(*p, p.config.NetworkConfig, netNsPath, netNsCreated)
-	if err != nil {
-		return nil, err
-	}
-
-	// Store the network
-	err = p.storage.storePodNetwork(p.id, networkNS)
-	if err != nil {
+	// Create the pod network
+	if err := p.createNetwork(); err != nil {
 		return nil, err
 	}
 
 	// Start the VM
-	err = p.startVM(netNsPath)
-	if err != nil {
+	if err := p.startVM(); err != nil {
 		return nil, err
 	}
 
-	// Start the proxy
-	err = p.startProxy()
-	if err != nil {
+	// Create Containers
+	if err := p.createContainers(); err != nil {
 		return nil, err
 	}
 
-	// Start shims
-	if err := p.startShims(); err != nil {
+	// The pod is completely created now, we can store it.
+	if err := p.storePod(); err != nil {
 		return nil, err
 	}
 
@@ -119,38 +95,8 @@ func DeletePod(podID string) (VCPod, error) {
 		return nil, err
 	}
 
-	// Fetch the network config
-	networkNS, err := p.storage.fetchPodNetwork(podID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Stop shims
-	if err := p.stopShims(); err != nil {
-		return nil, err
-	}
-
-	// Stop the VM
-	err = p.stopVM()
-	if err != nil {
-		return nil, err
-	}
-
-	// Remove the network
-	if networkNS.NetNsCreated {
-		if err := p.network.remove(*p, networkNS); err != nil {
-			return nil, err
-		}
-	}
-
 	// Delete it.
-	err = p.delete()
-	if err != nil {
-		return nil, err
-	}
-
-	// Execute poststop hooks.
-	if err := p.config.Hooks.postStopHooks(); err != nil {
+	if err := p.delete(); err != nil {
 		return nil, err
 	}
 
@@ -219,6 +165,16 @@ func StopPod(podID string) (VCPod, error) {
 	err = p.stop()
 	if err != nil {
 		p.delete()
+		return nil, err
+	}
+
+	// Remove the network.
+	if err := p.removeNetwork(); err != nil {
+		return nil, err
+	}
+
+	// Execute poststop hooks.
+	if err := p.config.Hooks.postStopHooks(); err != nil {
 		return nil, err
 	}
 
@@ -348,6 +304,11 @@ func CreateContainer(podID string, containerConfig ContainerConfig) (VCPod, VCCo
 		return nil, nil, err
 	}
 
+	// Add the container to the containers list in the pod.
+	if err := p.addContainer(c); err != nil {
+		return nil, nil, err
+	}
+
 	// Store it.
 	err = c.storeContainer()
 	if err != nil {
@@ -388,7 +349,7 @@ func DeleteContainer(podID, containerID string) (VCContainer, error) {
 	}
 
 	// Fetch the container.
-	c, err := fetchContainer(p, containerID)
+	c, err := p.findContainer(containerID)
 	if err != nil {
 		return nil, err
 	}
@@ -437,7 +398,7 @@ func StartContainer(podID, containerID string) (VCContainer, error) {
 	}
 
 	// Fetch the container.
-	c, err := fetchContainer(p, containerID)
+	c, err := p.findContainer(containerID)
 	if err != nil {
 		return nil, err
 	}
@@ -475,7 +436,7 @@ func StopContainer(podID, containerID string) (VCContainer, error) {
 	}
 
 	// Fetch the container.
-	c, err := fetchContainer(p, containerID)
+	c, err := p.findContainer(containerID)
 	if err != nil {
 		return nil, err
 	}
@@ -513,7 +474,7 @@ func EnterContainer(podID, containerID string, cmd Cmd) (VCPod, VCContainer, *Pr
 	}
 
 	// Fetch the container.
-	c, err := fetchContainer(p, containerID)
+	c, err := p.findContainer(containerID)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -570,7 +531,8 @@ func statusContainer(pod *Pod, containerID string) (ContainerStatus, error) {
 			// We have to check for the process state to make sure
 			// we update the status in case the process is supposed
 			// to be running but has been killed or terminated.
-			if (container.state.State == StateRunning ||
+			if (container.state.State == StateReady ||
+				container.state.State == StateRunning ||
 				container.state.State == StatePaused) &&
 				container.process.Pid > 0 {
 
@@ -635,7 +597,7 @@ func KillContainer(podID, containerID string, signal syscall.Signal, all bool) e
 	}
 
 	// Fetch the container.
-	c, err := fetchContainer(p, containerID)
+	c, err := p.findContainer(containerID)
 	if err != nil {
 		return err
 	}
@@ -684,7 +646,7 @@ func ProcessListContainer(podID, containerID string, options ProcessListOptions)
 	}
 
 	// Fetch the container.
-	c, err := fetchContainer(p, containerID)
+	c, err := p.findContainer(containerID)
 	if err != nil {
 		return nil, err
 	}

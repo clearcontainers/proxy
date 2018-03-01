@@ -41,7 +41,7 @@ const (
 	KataShimType ShimType = "kataShim"
 )
 
-var waitForShimTimeout = 5.0
+var waitForShimTimeout = 10.0
 var consoleFileMode = os.FileMode(0660)
 
 // ShimParams is the structure providing specific parameters needed
@@ -51,6 +51,7 @@ type ShimParams struct {
 	Token     string
 	URL       string
 	Console   string
+	Terminal  bool
 	Detach    bool
 	PID       int
 }
@@ -139,11 +140,7 @@ func signalShim(pid int, sig syscall.Signal) error {
 			"shim-signal": sig,
 		}).Info("Signalling shim")
 
-	if err := syscall.Kill(pid, sig); err != nil {
-		return err
-	}
-
-	return nil
+	return syscall.Kill(pid, sig)
 }
 
 func stopShim(pid int) error {
@@ -152,6 +149,34 @@ func stopShim(pid int) error {
 	}
 
 	return nil
+}
+
+func prepareAndStartShim(pod *Pod, shim shim, cid, token, url string, cmd Cmd) (*Process, error) {
+	process := &Process{
+		Token:     token,
+		StartTime: time.Now().UTC(),
+	}
+
+	shimParams := ShimParams{
+		Container: cid,
+		Token:     token,
+		URL:       url,
+		Console:   cmd.Console,
+		Terminal:  cmd.Interactive,
+		Detach:    cmd.Detach,
+	}
+
+	var pid int
+	if err := pod.network.run(pod.networkNS.NetNsPath, func() (shimErr error) {
+		pid, shimErr = shim.start(*pod, shimParams)
+		return
+	}); err != nil {
+		return nil, err
+	}
+
+	process.Pid = pid
+
+	return process, nil
 }
 
 func startShim(args []string, params ShimParams) (int, error) {

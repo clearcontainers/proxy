@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -46,6 +47,8 @@ const (
 	defaultMemSzMiB = 2048
 
 	defaultBridges = 1
+
+	defaultBlockDriver = VirtioSCSI
 )
 
 // deviceType describes a virtualized device type.
@@ -154,6 +157,10 @@ type HypervisorConfig struct {
 	// DisableBlockDeviceUse disallows a block device from being used.
 	DisableBlockDeviceUse bool
 
+	// BlockDeviceDriver specifies the driver to be used for block device
+	// either VirtioSCSI or VirtioBlock with the default driver being defaultBlockDriver
+	BlockDeviceDriver string
+
 	// KernelParams are additional guest kernel parameters.
 	KernelParams []Param
 
@@ -224,6 +231,10 @@ func (conf *HypervisorConfig) valid() (bool, error) {
 
 	if conf.DefaultBridges == 0 {
 		conf.DefaultBridges = defaultBridges
+	}
+
+	if conf.BlockDeviceDriver == "" {
+		conf.BlockDeviceDriver = defaultBlockDriver
 	}
 
 	return true, nil
@@ -414,6 +425,11 @@ func getHostMemorySizeKb(memInfoPath string) (uint64, error) {
 
 // RunningOnVMM checks if the system is running inside a VM.
 func RunningOnVMM(cpuInfoPath string) (bool, error) {
+	if runtime.GOARCH == "arm64" {
+		virtLog.Debugf("Unable to know if the system is running inside a VM")
+		return false, nil
+	}
+
 	flagsField := "flags"
 
 	f, err := os.Open(cpuInfoPath)
@@ -469,5 +485,4 @@ type hypervisor interface {
 	hotplugRemoveDevice(devInfo interface{}, devType deviceType) error
 	getPodConsole(podID string) string
 	capabilities() capabilities
-	getState() interface{}
 }

@@ -20,6 +20,25 @@ import (
 	"testing"
 )
 
+func testCreateNoopContainer() (*Pod, *Container, error) {
+	contID := "100"
+	config := newTestPodConfigNoop()
+
+	p, err := CreatePod(config)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	contConfig := newTestContainerConfigNoop(contID)
+
+	p, c, err := CreateContainer(p.ID(), contConfig)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return p.(*Pod), c.(*Container), nil
+}
+
 func TestNoopAgentInit(t *testing.T) {
 	n := &noopAgent{}
 	pod := &Pod{}
@@ -30,35 +49,15 @@ func TestNoopAgentInit(t *testing.T) {
 	}
 }
 
-func TestNoopAgentVmURL(t *testing.T) {
+func TestNoopAgentExec(t *testing.T) {
 	n := &noopAgent{}
-
-	url, err := n.vmURL()
+	cmd := Cmd{}
+	pod, container, err := testCreateNoopContainer()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if url != "" {
-		t.Fatalf("URL should be empty: %s", url)
-	}
-}
-
-func TestNoopAgentProxyURL(t *testing.T) {
-	n := &noopAgent{}
-
-	if err := n.setProxyURL(""); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestNoopAgentExec(t *testing.T) {
-	n := &noopAgent{}
-	pod := &Pod{}
-	container := Container{}
-	process := Process{}
-	cmd := Cmd{}
-
-	if err := n.exec(pod, container, process, cmd); err != nil {
+	if _, err = n.exec(pod, *container, cmd); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -85,21 +84,28 @@ func TestNoopAgentStopPod(t *testing.T) {
 
 func TestNoopAgentCreateContainer(t *testing.T) {
 	n := &noopAgent{}
-	pod := &Pod{}
-	container := &Container{}
-
-	err := n.createContainer(pod, container)
+	pod, container, err := testCreateNoopContainer()
 	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := n.startPod(*pod); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := n.createContainer(pod, container); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestNoopAgentStartContainer(t *testing.T) {
 	n := &noopAgent{}
-	pod := Pod{}
-	container := Container{}
+	pod, container, err := testCreateNoopContainer()
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	err := n.startContainer(pod, container)
+	err = n.startContainer(*pod, container)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,10 +113,12 @@ func TestNoopAgentStartContainer(t *testing.T) {
 
 func TestNoopAgentStopContainer(t *testing.T) {
 	n := &noopAgent{}
-	pod := Pod{}
-	container := Container{}
+	pod, container, err := testCreateNoopContainer()
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	err := n.stopContainer(pod, container)
+	err = n.stopContainer(*pod, *container)
 	if err != nil {
 		t.Fatal(err)
 	}

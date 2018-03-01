@@ -340,7 +340,11 @@ type BlockDevice struct {
 	DeviceType string
 	DeviceInfo DeviceInfo
 
-	// Path at which the device appears inside the VM, outside of the container mount namespace.
+	// SCSI Address of the block device, in case the device is attached using SCSI driver
+	// SCSI address is in the format SCSI-Id:LUN
+	SCSIAddr string
+
+	// Path at which the device appears inside the VM, outside of the container mount namespace
 	VirtPath string
 }
 
@@ -352,27 +356,12 @@ func newBlockDevice(devInfo DeviceInfo) *BlockDevice {
 }
 
 func (device *BlockDevice) attach(h hypervisor, c *Container) (err error) {
-	// If VM has not been launched yet, return immediately.
-	// This is because we always want to hotplug block devices.
-	// Eventually attachDevices will be called only after VM is launched,
-	// and this check can be taken out.
-	// See https://github.com/containers/virtcontainers/issues/444
-	if c.state.State == "" {
-		return nil
-	}
-
 	randBytes, err := generateRandomBytes(8)
 	if err != nil {
 		return err
 	}
 
 	device.DeviceInfo.ID = hex.EncodeToString(randBytes)
-
-	drive := Drive{
-		File:   device.DeviceInfo.HostPath,
-		Format: "raw",
-		ID:     makeNameID("drive", device.DeviceInfo.ID),
-	}
 
 	// Increment the block index for the pod. This is used to determine the name
 	// for the block device in the case where the block device is used as container
@@ -389,6 +378,13 @@ func (device *BlockDevice) attach(h hypervisor, c *Container) (err error) {
 		return err
 	}
 
+	drive := Drive{
+		File:   device.DeviceInfo.HostPath,
+		Format: "raw",
+		ID:     makeNameID("drive", device.DeviceInfo.ID),
+		Index:  index,
+	}
+
 	driveName, err := getVirtDriveName(index)
 	if err != nil {
 		return err
@@ -402,7 +398,17 @@ func (device *BlockDevice) attach(h hypervisor, c *Container) (err error) {
 
 	device.DeviceInfo.Hotplugged = true
 
-	device.VirtPath = filepath.Join("/dev", driveName)
+	if c.pod.config.HypervisorConfig.BlockDeviceDriver == VirtioBlock {
+		device.VirtPath = filepath.Join("/dev", driveName)
+	} else {
+		scsiAddr, err := getSCSIAddress(index)
+		if err != nil {
+			return err
+		}
+
+		device.SCSIAddr = scsiAddr
+	}
+
 	return nil
 }
 

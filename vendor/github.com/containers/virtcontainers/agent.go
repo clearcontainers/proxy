@@ -51,6 +51,13 @@ const (
 
 	// KataContainersAgent is the Kata Containers agent.
 	KataContainersAgent AgentType = "kata"
+
+	// SocketTypeVSOCK is a VSOCK socket type for talking to an agent.
+	SocketTypeVSOCK = "vsock"
+
+	// SocketTypeUNIX is a UNIX socket type for talking to an agent.
+	// It typically means the agent is living behind a host proxy.
+	SocketTypeUNIX = "unix"
 )
 
 // Set sets an agent type based on the input string.
@@ -133,22 +140,6 @@ type agent interface {
 	// to handle all other Agent interface methods.
 	init(pod *Pod, config interface{}) error
 
-	// vmURL returns the agent URL exposed by the hypervisor. This URL has
-	// been previously built from the agent implementation and provided to
-	// the hypervisor through a specific hypervisor interface function. It
-	// represents the entry point to connect to the agent through the VM.
-	// This function is particularly useful in case there is no proxy
-	// needed, meaning the proxy implementation will have to provide this
-	// URL instead of a real proxy URL.
-	vmURL() (string, error)
-
-	// setProxyURL sets the URL virtcontainers should connect in order to
-	// communicate with the agent. This URL can be either the proxy URL
-	// if it actually needs to go through a proxy, or it can be the VM
-	// URL in case no proxy is needed. Both ways, this has to be
-	// transparent for the agent implementation.
-	setProxyURL(url string) error
-
 	// capabilities should return a structure that specifies the capabilities
 	// supported by the agent.
 	capabilities() capabilities
@@ -157,7 +148,7 @@ type agent interface {
 	createPod(pod *Pod) error
 
 	// exec will tell the agent to run a command in an already running container.
-	exec(pod *Pod, c Container, process Process, cmd Cmd) error
+	exec(pod *Pod, c Container, cmd Cmd) (*Process, error)
 
 	// startPod will tell the agent to start all containers related to the Pod.
 	startPod(pod Pod) error
@@ -166,10 +157,10 @@ type agent interface {
 	stopPod(pod Pod) error
 
 	// createContainer will tell the agent to create a container related to a Pod.
-	createContainer(pod *Pod, c *Container) error
+	createContainer(pod *Pod, c *Container) (*Process, error)
 
 	// startContainer will tell the agent to start a container related to a Pod.
-	startContainer(pod Pod, c Container) error
+	startContainer(pod Pod, c *Container) error
 
 	// stopContainer will tell the agent to stop a container related to a Pod.
 	stopContainer(pod Pod, c Container) error

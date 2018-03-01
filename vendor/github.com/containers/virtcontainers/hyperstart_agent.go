@@ -18,10 +18,14 @@ package virtcontainers
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 
+	proxyClient "github.com/clearcontainers/proxy/client"
 	"github.com/containers/virtcontainers/pkg/hyperstart"
 	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
@@ -44,49 +48,49 @@ const (
 type HyperConfig struct {
 	SockCtlName string
 	SockTtyName string
-	Volumes     []Volume
-	Sockets     []Socket
 }
 
-// Logger returns a logrus logger appropriate for logging HyperConfig messages
-func (c *HyperConfig) Logger() *logrus.Entry {
-	return virtLog.WithField("subsystem", "hyperstart")
+func (h *hyper) generateSockets(pod Pod, c HyperConfig) {
+	podSocketPaths := []string{
+		fmt.Sprintf(defaultSockPathTemplates[0], runStoragePath, pod.id),
+		fmt.Sprintf(defaultSockPathTemplates[1], runStoragePath, pod.id),
+	}
+
+	if c.SockCtlName != "" {
+		podSocketPaths[0] = c.SockCtlName
+	}
+
+	if c.SockTtyName != "" {
+		podSocketPaths[1] = c.SockTtyName
+	}
+
+	for i := 0; i < len(podSocketPaths); i++ {
+		s := Socket{
+			DeviceID: fmt.Sprintf(defaultDeviceIDTemplate, i),
+			ID:       fmt.Sprintf(defaultIDTemplate, i),
+			HostPath: podSocketPaths[i],
+			Name:     fmt.Sprintf(defaultChannelTemplate, i),
+		}
+		h.sockets = append(h.sockets, s)
+	}
 }
 
-func (c *HyperConfig) validate(pod Pod) bool {
-	if len(c.Sockets) == 0 {
-		c.Logger().Info("No sockets from configuration")
-
-		podSocketPaths := []string{
-			fmt.Sprintf(defaultSockPathTemplates[0], runStoragePath, pod.id),
-			fmt.Sprintf(defaultSockPathTemplates[1], runStoragePath, pod.id),
-		}
-
-		c.SockCtlName = podSocketPaths[0]
-		c.SockTtyName = podSocketPaths[1]
-
-		for i := 0; i < len(podSocketPaths); i++ {
-			s := Socket{
-				DeviceID: fmt.Sprintf(defaultDeviceIDTemplate, i),
-				ID:       fmt.Sprintf(defaultIDTemplate, i),
-				HostPath: podSocketPaths[i],
-				Name:     fmt.Sprintf(defaultChannelTemplate, i),
-			}
-			c.Sockets = append(c.Sockets, s)
-		}
-	}
-
-	if len(c.Sockets) != 2 {
-		return false
-	}
-
-	return true
+// HyperAgentState is the structure describing the data stored from this
+// agent implementation.
+type HyperAgentState struct {
+	ProxyPid int
+	URL      string
 }
 
 // hyper is the Agent interface implementation for hyperstart.
 type hyper struct {
-	config HyperConfig
+	pod    Pod
+	shim   shim
 	proxy  proxy
+	client *proxyClient.Client
+	state  HyperAgentState
+
+	sockets []Socket
 }
 
 type hyperstartProxyCmd struct {
@@ -167,18 +171,13 @@ func (h *hyper) processHyperRoute(route netlink.Route, deviceName string) *hyper
 }
 
 func (h *hyper) buildNetworkInterfacesAndRoutes(pod Pod) ([]hyperstart.NetworkIface, []hyperstart.Route, error) {
-	networkNS, err := pod.storage.fetchPodNetwork(pod.id)
-	if err != nil {
-		return []hyperstart.NetworkIface{}, []hyperstart.Route{}, err
-	}
-
-	if networkNS.NetNsPath == "" {
+	if pod.networkNS.NetNsPath == "" {
 		return []hyperstart.NetworkIface{}, []hyperstart.Route{}, nil
 	}
 
 	var ifaces []hyperstart.NetworkIface
 	var routes []hyperstart.Route
-	for _, endpoint := range networkNS.Endpoints {
+	for _, endpoint := range pod.networkNS.Endpoints {
 		var ipAddresses []hyperstart.IPAddress
 		for _, addr := range endpoint.Properties().Addrs {
 			// Skip IPv6 because not supported by hyperstart.
@@ -219,7 +218,7 @@ func (h *hyper) buildNetworkInterfacesAndRoutes(pod Pod) ([]hyperstart.NetworkIf
 	return ifaces, routes, nil
 }
 
-func fsMapFromMounts(mounts []*Mount) []*hyperstart.FsmapDescriptor {
+func fsMapFromMounts(mounts []Mount) []*hyperstart.FsmapDescriptor {
 	var fsmap []*hyperstart.FsmapDescriptor
 
 	for _, m := range mounts {
@@ -240,41 +239,35 @@ func fsMapFromMounts(mounts []*Mount) []*hyperstart.FsmapDescriptor {
 func (h *hyper) init(pod *Pod, config interface{}) (err error) {
 	switch c := config.(type) {
 	case HyperConfig:
-		if c.validate(*pod) == false {
-			return fmt.Errorf("Invalid hyperstart configuration: %v", c)
-		}
-		h.config = c
+		// Create agent sockets from paths provided through
+		// configuration, or generate them from scratch.
+		h.generateSockets(*pod, c)
+
+		h.pod = *pod
 	default:
 		return fmt.Errorf("Invalid config type")
 	}
 
-	// Override pod agent configuration
-	pod.config.AgentConfig = h.config
+	h.proxy, err = newProxy(pod.config.ProxyType)
+	if err != nil {
+		return err
+	}
 
-	h.proxy = pod.proxy
+	h.shim, err = newShim(pod.config.ShimType)
+	if err != nil {
+		return err
+	}
 
-	return nil
-}
+	// Fetch agent runtime info.
+	if err := pod.storage.fetchAgentState(pod.id, &h.state); err != nil {
+		h.Logger().Debug("Could not retrieve anything from storage")
+	}
 
-// vmURL returns VM URL from hyperstart agent implementation.
-func (h *hyper) vmURL() (string, error) {
-	return "", nil
-}
-
-// setProxyURL sets proxy URL for hyperstart agent implementation.
-func (h *hyper) setProxyURL(url string) error {
 	return nil
 }
 
 func (h *hyper) createPod(pod *Pod) (err error) {
-	for _, volume := range h.config.Volumes {
-		err := pod.hypervisor.addDevice(volume, fsDev)
-		if err != nil {
-			return err
-		}
-	}
-
-	for _, socket := range h.config.Sockets {
+	for _, socket := range h.sockets {
 		err := pod.hypervisor.addDevice(socket, serialPortDev)
 		if err != nil {
 			return err
@@ -305,15 +298,25 @@ func (h *hyper) capabilities() capabilities {
 }
 
 // exec is the agent command execution implementation for hyperstart.
-func (h *hyper) exec(pod *Pod, c Container, process Process, cmd Cmd) error {
+func (h *hyper) exec(pod *Pod, c Container, cmd Cmd) (*Process, error) {
+	token, err := h.attach()
+	if err != nil {
+		return nil, err
+	}
+
 	hyperProcess, err := h.buildHyperContainerProcess(cmd)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	execCommand := hyperstart.ExecCommand{
 		Container: c.id,
 		Process:   *hyperProcess,
+	}
+
+	process, err := prepareAndStartShim(pod, h.shim, c.id, token, h.state.URL, cmd)
+	if err != nil {
+		return nil, err
 	}
 
 	proxyCmd := hyperstartProxyCmd{
@@ -322,15 +325,34 @@ func (h *hyper) exec(pod *Pod, c Container, process Process, cmd Cmd) error {
 		token:   process.Token,
 	}
 
-	if _, err := h.proxy.sendCmd(proxyCmd); err != nil {
-		return err
+	if _, err := h.sendCmd(proxyCmd); err != nil {
+		return nil, err
 	}
 
-	return nil
+	return process, nil
 }
 
 // startPod is the agent Pod starting implementation for hyperstart.
 func (h *hyper) startPod(pod Pod) error {
+	// Start the proxy here
+	pid, uri, err := h.proxy.start(pod, proxyParams{})
+	if err != nil {
+		return err
+	}
+
+	// Fill agent state with proxy information, and store them.
+	h.state.ProxyPid = pid
+	h.state.URL = uri
+	if err := pod.storage.storeAgentState(pod.id, h.state); err != nil {
+		return err
+	}
+
+	h.Logger().WithField("proxy-pid", pid).Info("proxy started")
+
+	if err := h.register(); err != nil {
+		return err
+	}
+
 	ifaces, routes, err := h.buildNetworkInterfacesAndRoutes(pod)
 	if err != nil {
 		return err
@@ -354,11 +376,8 @@ func (h *hyper) startPod(pod Pod) error {
 		message: hyperPod,
 	}
 
-	if _, err := h.proxy.sendCmd(proxyCmd); err != nil {
-		return err
-	}
-
-	return nil
+	_, err = h.sendCmd(proxyCmd)
+	return err
 }
 
 // stopPod is the agent Pod stopping implementation for hyperstart.
@@ -368,14 +387,18 @@ func (h *hyper) stopPod(pod Pod) error {
 		message: nil,
 	}
 
-	if _, err := h.proxy.sendCmd(proxyCmd); err != nil {
+	if _, err := h.sendCmd(proxyCmd); err != nil {
 		return err
 	}
 
-	return nil
+	if err := h.unregister(); err != nil {
+		return err
+	}
+
+	return h.proxy.stop(pod, h.state.ProxyPid)
 }
 
-func (h *hyper) startOneContainer(pod Pod, c Container) error {
+func (h *hyper) startOneContainer(pod Pod, c *Container) error {
 	process, err := h.buildHyperContainerProcess(c.config.Cmd)
 	if err != nil {
 		return err
@@ -391,13 +414,22 @@ func (h *hyper) startOneContainer(pod Pod, c Container) error {
 	container.SystemMountsInfo.BindMountDev = c.systemMountsInfo.BindMountDev
 
 	if c.state.Fstype != "" {
-		driveName, err := getVirtDriveName(c.state.BlockIndex)
-		if err != nil {
-			return err
+		// Pass a drive name only in case of block driver
+		if pod.config.HypervisorConfig.BlockDeviceDriver == VirtioBlock {
+			driveName, err := getVirtDriveName(c.state.BlockIndex)
+			if err != nil {
+				return err
+			}
+			container.Image = driveName
+		} else {
+			scsiAddr, err := getSCSIAddress(c.state.BlockIndex)
+			if err != nil {
+				return err
+			}
+			container.SCSIAddr = scsiAddr
 		}
 
 		container.Fstype = c.state.Fstype
-		container.Image = driveName
 	} else {
 
 		if err := bindMountContainerRootfs(defaultSharedDir, pod.id, c.id, c.rootFs, false); err != nil {
@@ -409,7 +441,7 @@ func (h *hyper) startOneContainer(pod Pod, c Container) error {
 	//TODO : Enter mount namespace
 
 	// Handle container mounts
-	newMounts, err := bindMountContainerMounts(defaultSharedDir, pod.id, c.id, c.mounts)
+	newMounts, err := c.mountSharedDirMounts(defaultSharedDir, "")
 	if err != nil {
 		bindUnmountAllRootfs(defaultSharedDir, pod)
 		return err
@@ -427,6 +459,7 @@ func (h *hyper) startOneContainer(pod Pod, c Container) error {
 				Path:         d.DeviceInfo.ContainerPath,
 				AbsolutePath: true,
 				DockerVolume: false,
+				SCSIAddr:     d.SCSIAddr,
 			}
 			fsmap = append(fsmap, fsmapDesc)
 		}
@@ -441,7 +474,7 @@ func (h *hyper) startOneContainer(pod Pod, c Container) error {
 		token:   c.process.Token,
 	}
 
-	if _, err := h.proxy.sendCmd(proxyCmd); err != nil {
+	if _, err := h.sendCmd(proxyCmd); err != nil {
 		return err
 	}
 
@@ -449,17 +482,27 @@ func (h *hyper) startOneContainer(pod Pod, c Container) error {
 }
 
 // createContainer is the agent Container creation implementation for hyperstart.
-func (h *hyper) createContainer(pod *Pod, c *Container) error {
-	return nil
+func (h *hyper) createContainer(pod *Pod, c *Container) (*Process, error) {
+	token, err := h.attach()
+	if err != nil {
+		return nil, err
+	}
+
+	return prepareAndStartShim(pod, h.shim, c.id, token, h.state.URL, c.config.Cmd)
 }
 
 // startContainer is the agent Container starting implementation for hyperstart.
-func (h *hyper) startContainer(pod Pod, c Container) error {
+func (h *hyper) startContainer(pod Pod, c *Container) error {
 	return h.startOneContainer(pod, c)
 }
 
 // stopContainer is the agent Container stopping implementation for hyperstart.
 func (h *hyper) stopContainer(pod Pod, c Container) error {
+	// Nothing to be done in case the container has not been started.
+	if c.state.State == StateReady {
+		return nil
+	}
+
 	return h.stopOneContainer(pod.id, c)
 }
 
@@ -473,11 +516,11 @@ func (h *hyper) stopOneContainer(podID string, c Container) error {
 		message: removeCommand,
 	}
 
-	if _, err := h.proxy.sendCmd(proxyCmd); err != nil {
+	if _, err := h.sendCmd(proxyCmd); err != nil {
 		return err
 	}
 
-	if err := bindUnmountContainerMounts(c.mounts); err != nil {
+	if err := c.unmountHostMounts(); err != nil {
 		return err
 	}
 
@@ -492,6 +535,12 @@ func (h *hyper) stopOneContainer(podID string, c Container) error {
 
 // killContainer is the agent process signal implementation for hyperstart.
 func (h *hyper) killContainer(pod Pod, c Container, signal syscall.Signal, all bool) error {
+	// Send the signal to the shim directly in case the container has not
+	// been started yet.
+	if c.state.State == StateReady {
+		return signalShim(c.process.Pid, signal)
+	}
+
 	return h.killOneContainer(c.id, signal, all)
 }
 
@@ -507,7 +556,7 @@ func (h *hyper) killOneContainer(cID string, signal syscall.Signal, all bool) er
 		message: killCmd,
 	}
 
-	if _, err := h.proxy.sendCmd(proxyCmd); err != nil {
+	if _, err := h.sendCmd(proxyCmd); err != nil {
 		return err
 	}
 
@@ -530,7 +579,7 @@ func (h *hyper) processListOneContainer(podID, cID string, options ProcessListOp
 		message: psCmd,
 	}
 
-	response, err := h.proxy.sendCmd(proxyCmd)
+	response, err := h.sendCmd(proxyCmd)
 	if err != nil {
 		return nil, err
 	}
@@ -541,4 +590,171 @@ func (h *hyper) processListOneContainer(podID, cID string, options ProcessListOp
 	}
 
 	return msg, nil
+}
+
+// connectProxyRetry repeatedly tries to connect to the proxy on the specified
+// address until a timeout state is reached, when it will fail.
+func (h *hyper) connectProxyRetry(scheme, address string) (conn net.Conn, err error) {
+	attempt := 1
+
+	timeoutSecs := time.Duration(waitForProxyTimeoutSecs * time.Second)
+
+	startTime := time.Now()
+	lastLogTime := startTime
+
+	for {
+		conn, err = net.Dial(scheme, address)
+		if err == nil {
+			// If the initial connection was unsuccessful,
+			// ensure a log message is generated when successfully
+			// connected.
+			if attempt > 1 {
+				h.Logger().WithField("attempt", fmt.Sprintf("%d", attempt)).Info("Connected to proxy")
+			}
+
+			return conn, nil
+		}
+
+		attempt++
+
+		now := time.Now()
+
+		delta := now.Sub(startTime)
+		remaining := timeoutSecs - delta
+
+		if remaining <= 0 {
+			return nil, fmt.Errorf("failed to connect to proxy after %v: %v", timeoutSecs, err)
+		}
+
+		logDelta := now.Sub(lastLogTime)
+		logDeltaSecs := logDelta / time.Second
+
+		if logDeltaSecs >= 1 {
+			h.Logger().WithError(err).WithFields(logrus.Fields{
+				"attempt":             fmt.Sprintf("%d", attempt),
+				"proxy-network":       scheme,
+				"proxy-address":       address,
+				"remaining-time-secs": fmt.Sprintf("%2.2f", remaining.Seconds()),
+			}).Warning("Retrying proxy connection")
+
+			lastLogTime = now
+		}
+
+		time.Sleep(time.Duration(100) * time.Millisecond)
+	}
+}
+
+func (h *hyper) connect() error {
+	if h.client != nil {
+		return nil
+	}
+
+	u, err := url.Parse(h.state.URL)
+	if err != nil {
+		return err
+	}
+
+	if u.Scheme == "" {
+		return fmt.Errorf("URL scheme cannot be empty")
+	}
+
+	address := u.Host
+	if address == "" {
+		if u.Path == "" {
+			return fmt.Errorf("URL host and path cannot be empty")
+		}
+
+		address = u.Path
+	}
+
+	conn, err := h.connectProxyRetry(u.Scheme, address)
+	if err != nil {
+		return err
+	}
+
+	h.client = proxyClient.NewClient(conn)
+
+	return nil
+}
+
+func (h *hyper) disconnect() {
+	if h.client == nil {
+		return
+	}
+
+	h.client.Close()
+	h.client = nil
+}
+
+func (h *hyper) register() error {
+	if err := h.connect(); err != nil {
+		return err
+	}
+	defer h.disconnect()
+
+	registerVMOptions := &proxyClient.RegisterVMOptions{
+		Console:      h.pod.hypervisor.getPodConsole(h.pod.id),
+		NumIOStreams: 0,
+	}
+
+	_, err := h.client.RegisterVM(h.pod.id, h.sockets[0].HostPath,
+		h.sockets[1].HostPath, registerVMOptions)
+	return err
+}
+
+func (h *hyper) unregister() error {
+	if err := h.connect(); err != nil {
+		return err
+	}
+	defer h.disconnect()
+
+	h.client.UnregisterVM(h.pod.id)
+
+	return nil
+}
+
+func (h *hyper) attach() (string, error) {
+	if err := h.connect(); err != nil {
+		return "", err
+	}
+	defer h.disconnect()
+
+	numTokens := 1
+	attachVMOptions := &proxyClient.AttachVMOptions{
+		NumIOStreams: numTokens,
+	}
+
+	attachVMReturn, err := h.client.AttachVM(h.pod.id, attachVMOptions)
+	if err != nil {
+		return "", err
+	}
+
+	if len(attachVMReturn.IO.Tokens) != numTokens {
+		return "", fmt.Errorf("%d tokens retrieved out of %d expected",
+			len(attachVMReturn.IO.Tokens), numTokens)
+	}
+
+	return attachVMReturn.IO.Tokens[0], nil
+}
+
+func (h *hyper) sendCmd(proxyCmd hyperstartProxyCmd) (interface{}, error) {
+	if err := h.connect(); err != nil {
+		return nil, err
+	}
+	defer h.disconnect()
+
+	attachVMOptions := &proxyClient.AttachVMOptions{
+		NumIOStreams: 0,
+	}
+
+	if _, err := h.client.AttachVM(h.pod.id, attachVMOptions); err != nil {
+		return nil, err
+	}
+
+	var tokens []string
+	if proxyCmd.token != "" {
+		tokens = append(tokens, proxyCmd.token)
+	}
+
+	return h.client.HyperWithTokens(proxyCmd.cmd, tokens, proxyCmd.message)
 }

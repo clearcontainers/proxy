@@ -17,13 +17,13 @@
 package virtcontainers
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
 	"time"
 
-	"github.com/containers/virtcontainers/pkg/uuid"
 	"github.com/sirupsen/logrus"
 )
 
@@ -206,34 +206,9 @@ func (c *Container) setStateHotpluggedDrive(hotplugged bool) error {
 	return nil
 }
 
-// URL returns the URL related to the pod.
-func (c *Container) URL() string {
-	return c.pod.URL()
-}
-
 // GetAnnotations returns container's annotations
 func (c *Container) GetAnnotations() map[string]string {
 	return c.config.Annotations
-}
-
-func (c *Container) startShim() error {
-	proxyInfo, url, err := c.pod.proxy.connect(*(c.pod), true)
-	if err != nil {
-		return err
-	}
-
-	if err := c.pod.proxy.disconnect(); err != nil {
-		return err
-	}
-
-	process, err := c.createShimProcess(proxyInfo.Token, url, c.config.Cmd, true)
-	if err != nil {
-		return err
-	}
-
-	c.process = *process
-
-	return c.storeProcess()
 }
 
 func (c *Container) storeProcess() error {
@@ -258,30 +233,6 @@ func (c *Container) storeDevices() error {
 
 func (c *Container) fetchDevices() ([]Device, error) {
 	return c.pod.storage.fetchContainerDevices(c.podID, c.id)
-}
-
-// fetchContainer fetches a container config from a pod ID and returns a Container.
-func fetchContainer(pod *Pod, containerID string) (*Container, error) {
-	if pod == nil {
-		return nil, errNeedPod
-	}
-
-	if containerID == "" {
-		return nil, errNeedContainerID
-	}
-
-	fs := filesystem{}
-	config, err := fs.fetchContainerConfig(pod.id, containerID)
-	if err != nil {
-		return nil, err
-	}
-
-	container, err := createContainer(pod, config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create container with config %v in pod %v: %v", config, pod.id, err)
-	}
-
-	return container, nil
 }
 
 // storeContainer stores a container config.
@@ -324,6 +275,77 @@ func (c *Container) createContainersDirs() error {
 	if err != nil {
 		c.pod.storage.deleteContainerResources(c.podID, c.id, nil)
 		return err
+	}
+
+	return nil
+}
+
+// mountSharedDirMounts handles bind-mounts by bindmounting to the host shared
+// directory which is mounted through 9pfs in the VM.
+// It also updates the container mount list with the HostPath info, and store
+// container mounts to the storage. This way, we will have the HostPath info
+// available when we will need to unmount those mounts.
+func (c *Container) mountSharedDirMounts(hostSharedDir, guestSharedDir string) ([]Mount, error) {
+	var sharedDirMounts []Mount
+	for idx, m := range c.mounts {
+		if isSystemMount(m.Destination) || m.Type != "bind" {
+			continue
+		}
+
+		randBytes, err := generateRandomBytes(8)
+		if err != nil {
+			return nil, err
+		}
+
+		// These mounts are created in the shared dir
+		filename := fmt.Sprintf("%s-%s-%s", c.id, hex.EncodeToString(randBytes), filepath.Base(m.Destination))
+		mountDest := filepath.Join(hostSharedDir, c.pod.id, filename)
+
+		if err := bindMount(m.Source, mountDest, false); err != nil {
+			return nil, err
+		}
+
+		// Save HostPath mount value into the mount list of the container.
+		c.mounts[idx].HostPath = mountDest
+
+		// Check if mount is readonly, let the agent handle the readonly mount
+		// within the VM.
+		readonly := false
+		for _, flag := range m.Options {
+			if flag == "ro" {
+				readonly = true
+			}
+		}
+
+		sharedDirMount := Mount{
+			Source:      filepath.Join(guestSharedDir, filename),
+			Destination: m.Destination,
+			Type:        m.Type,
+			Options:     m.Options,
+			ReadOnly:    readonly,
+		}
+
+		sharedDirMounts = append(sharedDirMounts, sharedDirMount)
+	}
+
+	if err := c.storeMounts(); err != nil {
+		return nil, err
+	}
+
+	return sharedDirMounts, nil
+}
+
+func (c *Container) unmountHostMounts() error {
+	for _, m := range c.mounts {
+		if m.HostPath != "" {
+			if err := syscall.Unmount(m.HostPath, 0); err != nil {
+				c.Logger().WithFields(logrus.Fields{
+					"host-path": m.HostPath,
+					"error":     err,
+				}).Warn("Could not umount")
+				return err
+			}
+		}
 	}
 
 	return nil
@@ -382,27 +404,8 @@ func newContainer(pod *Pod, contConfig ContainerConfig) (*Container, error) {
 	return c, nil
 }
 
-// newContainers uses newContainer to create a Container slice.
-func newContainers(pod *Pod, contConfigs []ContainerConfig) ([]*Container, error) {
-	if pod == nil {
-		return nil, errNeedPod
-	}
-
-	var containers []*Container
-
-	for _, contConfig := range contConfigs {
-		c, err := newContainer(pod, contConfig)
-		if err != nil {
-			return containers, err
-		}
-
-		containers = append(containers, c)
-	}
-
-	return containers, nil
-}
-
-// createContainer creates and start a container inside a Pod.
+// createContainer creates and start a container inside a Pod. It has to be
+// called only when a new container, not known by the pod, has to be created.
 func createContainer(pod *Pod, contConfig ContainerConfig) (*Container, error) {
 	if pod == nil {
 		return nil, errNeedPod
@@ -413,28 +416,46 @@ func createContainer(pod *Pod, contConfig ContainerConfig) (*Container, error) {
 		return nil, err
 	}
 
-	err = c.createContainersDirs()
+	if err := c.createContainersDirs(); err != nil {
+		return nil, err
+	}
+
+	if !c.pod.config.HypervisorConfig.DisableBlockDeviceUse {
+		agentCaps := c.pod.agent.capabilities()
+		hypervisorCaps := c.pod.hypervisor.capabilities()
+
+		if agentCaps.isBlockDeviceSupported() && hypervisorCaps.isBlockDeviceHotplugSupported() {
+			if err := c.hotplugDrive(); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// Attach devices
+	if err := c.attachDevices(); err != nil {
+		return nil, err
+	}
+
+	// Deduce additional system mount info that should be handled by the agent
+	// inside the VM
+	c.getSystemMountInfo()
+
+	if err := c.storeDevices(); err != nil {
+		return nil, err
+	}
+
+	process, err := pod.agent.createContainer(c.pod, c)
 	if err != nil {
 		return nil, err
 	}
+	c.process = *process
 
-	state, err := c.pod.storage.fetchContainerState(c.podID, c.id)
-	if err == nil && state.State != "" {
-		c.state.State = state.State
-		return c, nil
-	}
-
-	// If we reached that point, this means that no state file has been
-	// found and that we are in the first creation of this container.
-	// We don't want the following code to be executed outside of this
-	// specific case.
-	pod.containers = append(pod.containers, c)
-
-	if err := c.startShim(); err != nil {
+	// Store the container process returned by the agent.
+	if err := c.storeProcess(); err != nil {
 		return nil, err
 	}
 
-	if err := c.pod.setContainerState(c.id, StateReady); err != nil {
+	if err := c.setContainerState(StateReady); err != nil {
 		return nil, err
 	}
 
@@ -442,52 +463,34 @@ func createContainer(pod *Pod, contConfig ContainerConfig) (*Container, error) {
 }
 
 func (c *Container) delete() error {
-	state, err := c.pod.storage.fetchContainerState(c.podID, c.id)
-	if err != nil {
-		return err
-	}
-
-	if state.State != StateReady && state.State != StateStopped {
+	if c.state.State != StateReady &&
+		c.state.State != StateStopped {
 		return fmt.Errorf("Container not ready or stopped, impossible to delete")
 	}
 
-	if err := stopShim(c.process.Pid); err != nil {
+	// Remove the container from pod structure
+	if err := c.pod.removeContainer(c.id); err != nil {
 		return err
 	}
 
-	err = c.pod.storage.deleteContainerResources(c.podID, c.id, nil)
-	if err != nil {
-		return err
+	return c.pod.storage.deleteContainerResources(c.podID, c.id, nil)
+}
+
+// checkPodRunning validates the container state.
+//
+// cmd specifies the operation (or verb) that the retrieval is destined
+// for and is only used to make the returned error as descriptive as
+// possible.
+func (c *Container) checkPodRunning(cmd string) error {
+	if cmd == "" {
+		return fmt.Errorf("Cmd cannot be empty")
+	}
+
+	if c.pod.state.State != StateRunning {
+		return fmt.Errorf("Pod not running, impossible to %s the container", cmd)
 	}
 
 	return nil
-}
-
-// fetchState retrieves the container state.
-//
-// cmd specifies the operation (or verb) that the retieval is destined
-// for and is only used to make the returned error as descriptive as
-// possible.
-func (c *Container) fetchState(cmd string) (State, error) {
-	if cmd == "" {
-		return State{}, fmt.Errorf("Cmd cannot be empty")
-	}
-
-	state, err := c.pod.storage.fetchPodState(c.pod.id)
-	if err != nil {
-		return State{}, err
-	}
-
-	if state.State != StateRunning {
-		return State{}, fmt.Errorf("Pod not running, impossible to %s the container", cmd)
-	}
-
-	state, err = c.pod.storage.fetchContainerState(c.podID, c.id)
-	if err != nil {
-		return State{}, err
-	}
-
-	return state, nil
 }
 
 func (c *Container) getSystemMountInfo() {
@@ -504,47 +507,20 @@ func (c *Container) getSystemMountInfo() {
 }
 
 func (c *Container) start() error {
-	state, err := c.fetchState("start")
-	if err != nil {
+	if err := c.checkPodRunning("start"); err != nil {
 		return err
 	}
 
-	if state.State != StateReady && state.State != StateStopped {
+	if c.state.State != StateReady &&
+		c.state.State != StateStopped {
 		return fmt.Errorf("Container not ready or stopped, impossible to start")
 	}
 
-	err = state.validTransition(StateReady, StateRunning)
-	if err != nil {
-		err = state.validTransition(StateStopped, StateRunning)
-		if err != nil {
-			return err
-		}
-	}
-
-	if _, _, err := c.pod.proxy.connect(*(c.pod), false); err != nil {
-		return err
-	}
-	defer c.pod.proxy.disconnect()
-
-	agentCaps := c.pod.agent.capabilities()
-	hypervisorCaps := c.pod.hypervisor.capabilities()
-
-	if agentCaps.isBlockDeviceSupported() && hypervisorCaps.isBlockDeviceHotplugSupported() {
-		if err := c.hotplugDrive(); err != nil {
-			return err
-		}
-	}
-
-	// Attach devices
-	if err := c.attachDevices(); err != nil {
+	if err := c.state.validTransition(c.state.State, StateRunning); err != nil {
 		return err
 	}
 
-	// Deduce additional system mount info that should be handled by the agent
-	// inside the VM
-	c.getSystemMountInfo()
-
-	if err := c.pod.agent.startContainer(*(c.pod), *c); err != nil {
+	if err := c.pod.agent.startContainer(*(c.pod), c); err != nil {
 		c.Logger().WithError(err).Error("Failed to start container")
 
 		if err := c.stop(); err != nil {
@@ -552,38 +528,28 @@ func (c *Container) start() error {
 		}
 		return err
 	}
-	c.storeMounts()
-	c.storeDevices()
 
-	err = c.setContainerState(StateRunning)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return c.setContainerState(StateRunning)
 }
 
 func (c *Container) stop() error {
-	state, err := c.fetchState("stop")
-	if err != nil {
-		return err
-	}
-
 	// In case the container status has been updated implicitly because
 	// the container process has terminated, it might be possible that
 	// someone try to stop the container, and we don't want to issue an
 	// error in that case. This should be a no-op.
-	if state.State == StateStopped {
+	//
+	// This has to be handled before the transition validation since this
+	// is an exception.
+	if c.state.State == StateStopped {
 		c.Logger().Info("Container already stopped")
 		return nil
 	}
 
-	if state.State != StateRunning {
-		return fmt.Errorf("Container not running, impossible to stop")
+	if c.pod.state.State != StateReady && c.pod.state.State != StateRunning {
+		return fmt.Errorf("Pod not ready or running, impossible to stop the container")
 	}
 
-	err = state.validTransition(StateRunning, StateStopped)
-	if err != nil {
+	if err := c.state.validTransition(c.state.State, StateStopped); err != nil {
 		return err
 	}
 
@@ -592,7 +558,7 @@ func (c *Container) stop() error {
 		// Make sure we stop the shim process
 		if running, _ := isShimRunning(c.process.Pid); running {
 			l := c.Logger()
-			l.Warn("Failed to stop container so stopping dangling shim")
+			l.Error("Failed to stop container so stopping dangling shim")
 			if err := stopShim(c.process.Pid); err != nil {
 				l.WithError(err).Warn("failed to stop shim")
 			}
@@ -600,27 +566,32 @@ func (c *Container) stop() error {
 
 	}()
 
-	if _, _, err := c.pod.proxy.connect(*(c.pod), false); err != nil {
-		return err
-	}
-	defer c.pod.proxy.disconnect()
-
-	err = c.pod.agent.killContainer(*(c.pod), *c, syscall.SIGKILL, true)
-	if err != nil {
-		return err
-	}
-
-	// Wait for the end of container
+	// Here we expect that stop() has been called because the container
+	// process returned or because it received a signal. In case of a
+	// signal, we want to give it some time to end the container process.
+	// However, if the signal didn't reach its goal, the caller still
+	// expects this container to be stopped, that's why we should not
+	// return an error, but instead try to kill it forcefully.
 	if err := waitForShim(c.process.Pid); err != nil {
+		// Force the container to be killed.
+		if err := c.pod.agent.killContainer(*(c.pod), *c, syscall.SIGKILL, true); err != nil {
+			return err
+		}
+
+		// Wait for the end of container process. We expect this call
+		// to succeed. Indeed, we have already given a second chance
+		// to the container by trying to kill it with SIGKILL, there
+		// is no reason to try to go further if we got an error.
+		if err := waitForShim(c.process.Pid); err != nil {
+			return err
+		}
+	}
+
+	if err := c.pod.agent.stopContainer(*(c.pod), *c); err != nil {
 		return err
 	}
 
-	err = c.pod.agent.stopContainer(*(c.pod), *c)
-	if err != nil {
-		return err
-	}
-
-	if err = c.detachDevices(); err != nil {
+	if err := c.detachDevices(); err != nil {
 		return err
 	}
 
@@ -628,36 +599,20 @@ func (c *Container) stop() error {
 		return err
 	}
 
-	err = c.setContainerState(StateStopped)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return c.setContainerState(StateStopped)
 }
 
 func (c *Container) enter(cmd Cmd) (*Process, error) {
-	state, err := c.fetchState("enter")
-	if err != nil {
+	if err := c.checkPodRunning("enter"); err != nil {
 		return nil, err
 	}
 
-	if state.State != StateRunning {
+	if c.state.State != StateRunning {
 		return nil, fmt.Errorf("Container not running, impossible to enter")
 	}
 
-	proxyInfo, url, err := c.pod.proxy.connect(*(c.pod), true)
+	process, err := c.pod.agent.exec(c.pod, *c, cmd)
 	if err != nil {
-		return nil, err
-	}
-	defer c.pod.proxy.disconnect()
-
-	process, err := c.createShimProcess(proxyInfo.Token, url, cmd, false)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := c.pod.agent.exec(c.pod, *c, *process, cmd); err != nil {
 		return nil, err
 	}
 
@@ -665,135 +620,27 @@ func (c *Container) enter(cmd Cmd) (*Process, error) {
 }
 
 func (c *Container) kill(signal syscall.Signal, all bool) error {
-	podState, err := c.pod.storage.fetchPodState(c.pod.id)
-	if err != nil {
-		return err
-	}
-
-	if podState.State != StateReady && podState.State != StateRunning {
+	if c.pod.state.State != StateReady && c.pod.state.State != StateRunning {
 		return fmt.Errorf("Pod not ready or running, impossible to signal the container")
 	}
 
-	state, err := c.pod.storage.fetchContainerState(c.podID, c.id)
-	if err != nil {
-		return err
+	if c.state.State != StateReady && c.state.State != StateRunning {
+		return fmt.Errorf("Container not ready or running, impossible to signal the container")
 	}
 
-	// In case our container is "ready", there is no point in trying to
-	// send any signal because nothing has been started. However, this is
-	// a valid case that we handle by doing nothing or by killing the shim
-	// and updating the container state, according to the signal.
-	if state.State == StateReady {
-		if signal != syscall.SIGTERM && signal != syscall.SIGKILL {
-			c.Logger().WithField("signal", signal).Info("Not sending singal as container already ready")
-			return nil
-		}
-
-		// Calling into stopShim() will send a SIGKILL to the shim.
-		// This signal will be forwarded to the proxy and it will be
-		// handled by the proxy itself. Indeed, because there is no
-		// process running inside the VM, there is no point in sending
-		// this signal to our agent. Instead, the proxy will take care
-		// of that signal by killing the shim (sending an exit code).
-		if err := stopShim(c.process.Pid); err != nil {
-			return err
-		}
-
-		return c.setContainerState(StateStopped)
-	}
-
-	if state.State != StateRunning {
-		return fmt.Errorf("Container not running, impossible to signal the container")
-	}
-
-	if _, _, err := c.pod.proxy.connect(*(c.pod), false); err != nil {
-		return err
-	}
-	defer c.pod.proxy.disconnect()
-
-	err = c.pod.agent.killContainer(*(c.pod), *c, signal, all)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return c.pod.agent.killContainer(*(c.pod), *c, signal, all)
 }
 
 func (c *Container) processList(options ProcessListOptions) (ProcessList, error) {
-	state, err := c.fetchState("ps")
-	if err != nil {
+	if err := c.checkPodRunning("ps"); err != nil {
 		return nil, err
 	}
 
-	if state.State != StateRunning {
+	if c.state.State != StateRunning {
 		return nil, fmt.Errorf("Container not running, impossible to list processes")
 	}
 
-	if _, _, err := c.pod.proxy.connect(*(c.pod), false); err != nil {
-		return nil, err
-	}
-	defer c.pod.proxy.disconnect()
-
 	return c.pod.agent.processListContainer(*(c.pod), *c, options)
-}
-
-func (c *Container) createShimProcess(token, url string, cmd Cmd, initProcess bool) (*Process, error) {
-	if c.pod.state.URL != url {
-		return &Process{}, fmt.Errorf("Pod URL %q and URL from proxy %q MUST be identical", c.pod.state.URL, url)
-	}
-
-	var process Process
-	if initProcess {
-		process = newInitProcess(token, c.id)
-	} else {
-		process = newProcess(token)
-	}
-
-	shimParams := ShimParams{
-		Container: c.id,
-		Token:     token,
-		URL:       url,
-		Console:   cmd.Console,
-		Detach:    cmd.Detach,
-	}
-
-	pid, err := c.pod.shim.start(*(c.pod), shimParams)
-	if err != nil {
-		return &Process{}, err
-	}
-
-	process.Pid = pid
-
-	return &process, nil
-}
-
-func newProcess(token string) Process {
-	if token == "" {
-		// Some proxy implementations will not generate
-		// a process token. In that case virtcontainers
-		// generates one
-		token = uuid.Generate().String()
-	}
-
-	return Process{
-		Token:     token,
-		StartTime: time.Now().UTC(),
-	}
-}
-
-func newInitProcess(token, containerID string) Process {
-	if token == "" {
-		// Some proxy implementations will not generate
-		// a process token. In that case virtcontainers
-		// generates one and it re-uses the container ID
-		// for init processes.
-		token = containerID
-	}
-
-	return Process{
-		Token:     token,
-		StartTime: time.Now().UTC(),
-	}
 }
 
 func (c *Container) hotplugDrive() error {
@@ -833,23 +680,24 @@ func (c *Container) hotplugDrive() error {
 		"fs-type":     fsType,
 	}).Info("Block device detected")
 
+	driveIndex, err := c.pod.getAndSetPodBlockIndex()
+	if err != nil {
+		return err
+	}
+
 	// Add drive with id as container id
 	devID := makeNameID("drive", c.id)
 	drive := Drive{
 		File:   devicePath,
 		Format: "raw",
 		ID:     devID,
+		Index:  driveIndex,
 	}
 
 	if err := c.pod.hypervisor.hotplugAddDevice(drive, blockDev); err != nil {
 		return err
 	}
 	c.setStateHotpluggedDrive(true)
-
-	driveIndex, err := c.pod.getAndSetPodBlockIndex()
-	if err != nil {
-		return err
-	}
 
 	if err := c.setStateBlockIndex(driveIndex); err != nil {
 		return err

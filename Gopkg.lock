@@ -7,7 +7,7 @@
     "pkg/hyperstart",
     "pkg/hyperstart/mock"
   ]
-  revision = "6bccdf63e8c47e294c9e320aaa1c7b30e35350ca"
+  revision = "c88890875e8d4ce31a0664d6a7e7ca637aae9045"
 
 [[projects]]
   name = "github.com/davecgh/go-spew"
@@ -53,6 +53,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "7b7e510e5315b97f4d052809fa25d56f1bd9b457f2fed92f1ef7e24a88a76b48"
+  inputs-digest = "2deb5e3eeb8c9668a8452bc2ab1b2db2e28d1e49dce4890e74ecac915e8687af"
   solver-name = "gps-cdcl"
   solver-version = 1
